@@ -1,4 +1,4 @@
-module githooksock
+module github.com/ready-to-review/github-event-socket
 
 go 1.23.0
 
