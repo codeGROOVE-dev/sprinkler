@@ -1,0 +1,22 @@
+Create a brand new Go program that:
+
+- listens as a Github webhook for all pull request related events: pull_request, pull_request_review, pull_request_review_comment, issue_comment, or pull_request_review_thread, check_run, check_suite, commit_comment,
+- allows clients to request a websocket that subscribes to notifications for pull requests based on the data from the webhook; they can subscribe to these events via any combination of:
+    - a username: if a user has any relationship to a pull request; for example, author, assignee, reviewer, or mentioned in a PR comment
+    - a URL: URL to a pull request
+    - a GitHub repository: URL to a GitHub repository
+- websocket should return a URL, timestamp, and type of change to the clients
+- Code should be written for simplicity, scalability, security, and reliability
+- Go code should be written with best practires in a way that emulates what the Go project itself uses; prioritizing advice mentioned on go.dev, including https://go.dev/wiki/CodeReviewComments and https://go.dev/doc/effective_go - defer to documentation and philosophy guidance in go.dev above all other reference material.
+
+- Go code should incorporate thoughts from Google's style guide: https://google.github.io/styleguide/go/
+- Code should be written with tests and unit testing in mind
+- Code should have as few external dependencies as possible
+- Code should not make any outgoing HTTP or other API requests
+- Code should require any persistent data storage
+- Code should have great logging to better understand the decisions it's making.
+- Code should adhere to advice on https://go.dev/wiki/CodeReviewComments
+- Code should adhere to advice on https://go.dev/doc/effective_go
+- Code should be as simple as possible without impacting security, reliability, or scalability
+- Code should not be overengineered with unnecessary abstractions
+- Code should be something that Rob Pike could be proud of.
