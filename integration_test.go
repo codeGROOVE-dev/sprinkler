@@ -13,9 +13,9 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/ready-to-review/github-event-socket/internal/hub"
-	"github.com/ready-to-review/github-event-socket/internal/security"
-	"github.com/ready-to-review/github-event-socket/internal/webhook"
+	"github.com/ready-to-review/github-event-socket/pkg/hub"
+	"github.com/ready-to-review/github-event-socket/pkg/security"
+	"github.com/ready-to-review/github-event-socket/pkg/webhook"
 )
 
 // TestWebhookToWebSocketIntegration tests the full flow from webhook to WebSocket
