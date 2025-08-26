@@ -99,6 +99,9 @@ func (h *Hub) Run(ctx context.Context) {
 					select {
 					case client.send <- msg.event:
 						matched++
+						log.Printf("delivered event to client: id=%s user=%s org=%s event_type=%s pr_url=%s",
+							client.ID, client.subscription.Username, client.subscription.Organization,
+							msg.event.Type, msg.event.URL)
 					default:
 						dropped++
 						log.Printf("dropped event for client %s: buffer full", client.ID)

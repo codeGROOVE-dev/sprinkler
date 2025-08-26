@@ -141,11 +141,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte("OK")); err != nil {
 		logger.Error("failed to write response", err, logger.Fields{"delivery_id": deliveryID})
 	}
-	logger.Info("processed webhook", logger.Fields{
-		"event_type":  eventType,
-		"delivery_id": deliveryID,
-		"pr_url":      prURL,
-	})
+
+	// Log full payload for development
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("failed to marshal payload for logging", err, logger.Fields{"delivery_id": deliveryID})
+	} else {
+		logger.Info("processed webhook", logger.Fields{
+			"event_type":  eventType,
+			"delivery_id": deliveryID,
+			"pr_url":      prURL,
+			"payload":     string(payloadJSON),
+		})
+	}
 }
 
 // VerifySignature validates the GitHub webhook signature.
