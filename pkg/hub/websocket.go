@@ -196,6 +196,17 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		username, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
 		if err != nil {
 			logger.Error("GitHub auth failed", err, logger.Fields{"ip": ip, "org": sub.Organization})
+
+			// Send error response to client
+			errorResp := map[string]string{
+				"type":  "error",
+				"error": "access_denied",
+				"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
+					"Please ensure you are a member of this organization.", sub.Organization),
+			}
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				log.Printf("failed to send error response: %v", sendErr)
+			}
 			return
 		}
 

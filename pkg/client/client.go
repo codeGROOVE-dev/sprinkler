@@ -14,44 +14,47 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+const (
+	// UI constants for logging.
+	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+	msgTypeField  = "type"
+)
+
 // Event represents a webhook event received from the server.
 type Event struct {
-	Type      string    `json:"type"`
-	URL       string    `json:"url"`
 	Timestamp time.Time `json:"timestamp"`
 	Raw       map[string]any
+	Type      string `json:"type"`
+	URL       string `json:"url"`
 }
 
 // Config holds the configuration for the client.
 type Config struct {
-	// Required fields
-	ServerURL    string
-	Organization string
-	Token        string
-
-	// Optional fields
-	EventTypes   []string
-	MyEventsOnly bool
-	Verbose      bool
-	NoReconnect  bool
-	MaxRetries   int
-	PingInterval time.Duration
-	MaxBackoff   time.Duration
 	OnEvent      func(Event)
 	OnConnect    func()
 	OnDisconnect func(error)
+	EventTypes   []string
+	PingInterval time.Duration
+	MaxBackoff   time.Duration
+	ServerURL    string
+	Organization string
+	Token        string
+	MaxRetries   int
+	MyEventsOnly bool
+	Verbose      bool
+	NoReconnect  bool
 }
 
 // Client represents a WebSocket client with automatic reconnection.
 type Client struct {
 	config     Config
 	ws         *websocket.Conn
-	mu         sync.RWMutex
-	connected  bool
-	eventCount int
-	retries    int
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
+	mu         sync.RWMutex
+	eventCount int
+	retries    int
+	connected  bool
 }
 
 // New creates a new robust WebSocket client.
@@ -112,11 +115,11 @@ func (c *Client) Start(ctx context.Context) error {
 		err := c.connect(ctx)
 		// Handle connection result
 		if err != nil {
-			log.Print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+			log.Print(separatorLine)
 			log.Print("WARNING: WebSocket CONNECTION LOST!")
 			log.Printf("Error: %v", err)
 			log.Printf("Events received before disconnect: %d", c.eventCount)
-			log.Print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+			log.Print(separatorLine)
 
 			// Notify disconnect callback
 			if c.config.OnDisconnect != nil {
@@ -163,7 +166,9 @@ func (c *Client) Stop() {
 	close(c.stopCh)
 	c.mu.Lock()
 	if c.ws != nil {
-		_ = c.ws.Close() // Ignore error on shutdown
+		if closeErr := c.ws.Close(); closeErr != nil {
+			log.Printf("Error closing websocket on shutdown: %v", closeErr)
+		}
 	}
 	c.mu.Unlock()
 	<-c.stoppedCh
@@ -252,6 +257,32 @@ func (c *Client) connect(ctx context.Context) error {
 	if err := websocket.JSON.Send(ws, sub); err != nil {
 		return fmt.Errorf("write subscription: %w", err)
 	}
+	log.Print(">>> Waiting for subscription confirmation...")
+
+	// Read first response - should be either an error or the first event/ping
+	var firstResponse map[string]any
+	if err := websocket.JSON.Receive(ws, &firstResponse); err != nil {
+		return fmt.Errorf("failed to read subscription response: %w", err)
+	}
+
+	// Check if it's an error response
+	if responseType, ok := firstResponse[msgTypeField].(string); ok && responseType == "error" {
+		errorCode := ""
+		if code, ok := firstResponse["error"].(string); ok {
+			errorCode = code
+		}
+		message := ""
+		if msg, ok := firstResponse["message"].(string); ok {
+			message = msg
+		}
+		log.Print(separatorLine)
+		log.Print("SUBSCRIPTION REJECTED BY SERVER!")
+		log.Printf("Error: %s", errorCode)
+		log.Printf("Message: %s", message)
+		log.Print(separatorLine)
+		return fmt.Errorf("subscription rejected: %s - %s", errorCode, message)
+	}
+
 	log.Printf("✓ Successfully subscribed with: %+v", sub)
 	log.Print(">>> Listening for events...")
 
@@ -268,7 +299,23 @@ func (c *Client) connect(ctx context.Context) error {
 	defer cancelPing()
 	go c.sendPings(pingCtx, ws)
 
-	// Read events
+	// Process the first response if it wasn't an error
+	if responseType, ok := firstResponse[msgTypeField].(string); ok {
+		if responseType == "ping" {
+			// Handle ping
+			log.Print("[PING-PONG] ← Received PING from server")
+			pong := map[string]string{msgTypeField: "pong"}
+			if err := websocket.JSON.Send(ws, pong); err != nil {
+				return fmt.Errorf("error sending pong response: %w", err)
+			}
+			log.Print("[PING-PONG] → Sent PONG response to server")
+		} else if responseType != "pong" {
+			// It's a real event, process it
+			c.processEvent(firstResponse)
+		}
+	}
+
+	// Read remaining events
 	return c.readEvents(ctx, ws)
 }
 
@@ -282,7 +329,7 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pong := map[string]string{"type": "pong"}
+			pong := map[string]string{msgTypeField: "pong"}
 			log.Print("[KEEP-ALIVE] Sending periodic pong to maintain connection...")
 			if err := websocket.JSON.Send(ws, pong); err != nil {
 				log.Printf("ERROR: Failed to send keep-alive pong: %v", err)
@@ -306,24 +353,24 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		// Receive message
 		var response map[string]any
 		if err := websocket.JSON.Receive(ws, &response); err != nil {
-			log.Print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+			log.Print(separatorLine)
 			log.Print("ERROR: Lost connection while reading!")
 			log.Printf("Read error: %v", err)
 			log.Printf("Events received before disconnect: %d", c.eventCount)
-			log.Print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+			log.Print(separatorLine)
 			return fmt.Errorf("read: %w", err)
 		}
 
 		// Check message type
-		msgType, ok := response["type"].(string)
-		if !ok {
-			msgType = ""
+		responseType := ""
+		if t, ok := response[msgTypeField].(string); ok {
+			responseType = t
 		}
 
 		// Handle ping messages
-		if msgType == "ping" {
+		if responseType == "ping" {
 			log.Print("[PING-PONG] ← Received PING from server")
-			pong := map[string]string{"type": "pong"}
+			pong := map[string]string{msgTypeField: "pong"}
 			if err := websocket.JSON.Send(ws, pong); err != nil {
 				log.Printf("[PING-PONG] ✗ Failed to send PONG response: %v", err)
 				return fmt.Errorf("error sending pong response: %w", err)
@@ -333,54 +380,66 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		}
 
 		// Handle pong acknowledgments
-		if msgType == "pong" {
+		if responseType == "pong" {
 			log.Print("[PING-PONG] ← Received PONG acknowledgment from server")
 			continue
 		}
 
-		// Parse event
-		event := Event{
-			Type: msgType,
-			Raw:  response,
+		// Process the event
+		c.processEvent(response)
+	}
+}
+
+// processEvent processes a received event.
+func (c *Client) processEvent(response map[string]any) {
+	// Extract message type
+	responseType := ""
+	if t, ok := response[msgTypeField].(string); ok {
+		responseType = t
+	}
+
+	// Parse event
+	event := Event{
+		Type: responseType,
+		Raw:  response,
+	}
+
+	// Extract URL
+	if url, ok := response["url"].(string); ok {
+		event.URL = url
+	}
+
+	// Extract timestamp
+	if ts, ok := response["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			event.Timestamp = t
 		}
+	}
 
-		// Extract URL
-		if url, ok := response["url"].(string); ok {
-			event.URL = url
-		}
+	// Increment event counter
+	c.mu.Lock()
+	c.eventCount++
+	eventNum := c.eventCount
+	c.mu.Unlock()
 
-		// Extract timestamp
-		if ts, ok := response["timestamp"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				event.Timestamp = t
-			}
-		}
-
-		// Increment event counter
-		c.mu.Lock()
-		c.eventCount++
-		eventNum := c.eventCount
-		c.mu.Unlock()
-
-		// Log event
-		if c.config.Verbose {
-			log.Printf("=== Event #%d at %s ===", eventNum, event.Timestamp.Format("15:04:05"))
-			log.Printf("Type: %s", event.Type)
-			log.Printf("URL: %s", event.URL)
-			log.Printf("Raw: %+v", event.Raw)
+	// Log event
+	if c.config.Verbose {
+		log.Printf("=== Event #%d at %s ===", eventNum, event.Timestamp.Format("15:04:05"))
+		log.Printf("Type: %s", event.Type)
+		log.Printf("URL: %s", event.URL)
+		log.Printf("Raw: %+v", event.Raw)
+	} else {
+		if event.Type != "" && event.URL != "" {
+			log.Printf("[%s] Event #%d: %s: %s",
+				event.Timestamp.Format("15:04:05"), eventNum, event.Type, event.URL)
 		} else {
-			if event.Type != "" && event.URL != "" {
-				log.Printf("[%s] Event #%d: %s: %s",
-					event.Timestamp.Format("15:04:05"), eventNum, event.Type, event.URL)
-			} else {
-				log.Printf("[%s] Event #%d received: %v",
-					event.Timestamp.Format("15:04:05"), eventNum, response)
-			}
+			log.Printf("[%s] Event #%d received: %v",
+				event.Timestamp.Format("15:04:05"), eventNum, response)
 		}
+	}
 
-		// Notify callback
-		if c.config.OnEvent != nil {
-			c.config.OnEvent(event)
-		}
+	// Notify callback
+	if c.config.OnEvent != nil {
+		c.config.OnEvent(event)
 	}
 }
