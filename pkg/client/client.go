@@ -14,6 +14,22 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+// AuthenticationError represents an authentication or authorization failure
+// that should not trigger reconnection attempts.
+type AuthenticationError struct {
+	message string
+}
+
+func (e *AuthenticationError) Error() string {
+	return e.message
+}
+
+// IsAuthenticationError checks if an error is an authentication error.
+func IsAuthenticationError(err error) bool {
+	var authErr *AuthenticationError
+	return errors.As(err, &authErr)
+}
+
 const (
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -115,6 +131,19 @@ func (c *Client) Start(ctx context.Context) error {
 		err := c.connect(ctx)
 		// Handle connection result
 		if err != nil {
+			// Check if it's an authentication error - don't retry these
+			if IsAuthenticationError(err) {
+				log.Print(separatorLine)
+				log.Print("AUTHENTICATION FAILED!")
+				log.Printf("Error: %v", err)
+				log.Print("This is likely due to:")
+				log.Print("- Invalid GitHub token")
+				log.Print("- Not being a member of the requested organization")
+				log.Print("- Insufficient permissions")
+				log.Print(separatorLine)
+				return err
+			}
+
 			log.Print(separatorLine)
 			log.Print("WARNING: WebSocket CONNECTION LOST!")
 			log.Printf("Error: %v", err)
@@ -259,14 +288,30 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 	log.Print(">>> Waiting for subscription confirmation...")
 
-	// Read first response - should be either an error or the first event/ping
-	var firstResponse map[string]any
-	if err := websocket.JSON.Receive(ws, &firstResponse); err != nil {
-		return fmt.Errorf("failed to read subscription response: %w", err)
+	// Set a read deadline for subscription confirmation to prevent indefinite hanging
+	if err := ws.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return fmt.Errorf("failed to set read deadline: %w", err)
 	}
 
-	// Check if it's an error response
-	if responseType, ok := firstResponse[msgTypeField].(string); ok && responseType == "error" {
+	// Read first response - should be either an error or subscription confirmation
+	var firstResponse map[string]any
+	if err := websocket.JSON.Receive(ws, &firstResponse); err != nil {
+		return fmt.Errorf("failed to read subscription response (timeout after 10s): %w", err)
+	}
+
+	// Clear read deadline after successful read
+	if err := ws.SetReadDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("failed to clear read deadline: %w", err)
+	}
+
+	// Check response type
+	responseType := ""
+	if t, ok := firstResponse[msgTypeField].(string); ok {
+		responseType = t
+	}
+
+	// Handle error response
+	if responseType == "error" {
 		errorCode := ""
 		if code, ok := firstResponse["error"].(string); ok {
 			errorCode = code
@@ -280,10 +325,40 @@ func (c *Client) connect(ctx context.Context) error {
 		log.Printf("Error: %s", errorCode)
 		log.Printf("Message: %s", message)
 		log.Print(separatorLine)
+
+		// Return AuthenticationError for access denied errors to prevent retries
+		if errorCode == "access_denied" {
+			return &AuthenticationError{
+				message: fmt.Sprintf("Access denied: %s", message),
+			}
+		}
+
 		return fmt.Errorf("subscription rejected: %s - %s", errorCode, message)
 	}
 
-	log.Printf("✓ Successfully subscribed with: %+v", sub)
+	// Handle subscription confirmation
+	if responseType == "subscription_confirmed" {
+		log.Print("✓ Subscription confirmed by server!")
+		if org, ok := firstResponse["organization"].(string); ok {
+			log.Printf("  Organization: %s", org)
+		}
+		if username, ok := firstResponse["username"].(string); ok {
+			log.Printf("  Username: %s", username)
+		}
+		if eventTypes, ok := firstResponse["event_types"].([]any); ok && len(eventTypes) > 0 {
+			types := make([]string, len(eventTypes))
+			for i, t := range eventTypes {
+				if s, ok := t.(string); ok {
+					types[i] = s
+				}
+			}
+			log.Printf("  Event types: %v", types)
+		}
+	} else {
+		// For backward compatibility, treat any non-error response as success
+		log.Printf("✓ Successfully subscribed (server response type: %s)", responseType)
+	}
+
 	log.Print(">>> Listening for events...")
 
 	// Notify connect callback
@@ -299,21 +374,8 @@ func (c *Client) connect(ctx context.Context) error {
 	defer cancelPing()
 	go c.sendPings(pingCtx, ws)
 
-	// Process the first response if it wasn't an error
-	if responseType, ok := firstResponse[msgTypeField].(string); ok {
-		if responseType == "ping" {
-			// Handle ping
-			log.Print("[PING-PONG] ← Received PING from server")
-			pong := map[string]string{msgTypeField: "pong"}
-			if err := websocket.JSON.Send(ws, pong); err != nil {
-				return fmt.Errorf("error sending pong response: %w", err)
-			}
-			log.Print("[PING-PONG] → Sent PONG response to server")
-		} else if responseType != "pong" {
-			// It's a real event, process it
-			c.processEvent(firstResponse)
-		}
-	}
+	// Don't process subscription_confirmed as an event
+	// We've already handled it above
 
 	// Read remaining events
 	return c.readEvents(ctx, ws)

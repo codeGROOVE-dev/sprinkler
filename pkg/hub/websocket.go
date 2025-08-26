@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -73,6 +74,120 @@ func NewWebSocketHandlerForTest(h *Hub, connLimiter *security.ConnectionLimiter,
 	return handler
 }
 
+// extractGitHubToken extracts and validates the GitHub token from the request.
+func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (string, bool) {
+	if h.testMode {
+		return "", true
+	}
+
+	authHeader := ws.Request().Header.Get("Authorization")
+	if authHeader == "" {
+		logger.Warn("missing Authorization header", logger.Fields{"ip": ip})
+		return "", false
+	}
+
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		logger.Warn("invalid Authorization header format", logger.Fields{"ip": ip})
+		return "", false
+	}
+	githubToken := strings.TrimPrefix(authHeader, bearerPrefix)
+
+	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
+		logger.Warn("invalid GitHub token format", logger.Fields{"ip": ip})
+		return "", false
+	}
+
+	return githubToken, true
+}
+
+// readSubscription reads and validates the subscription from the WebSocket.
+func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subscription, error) {
+	var sub Subscription
+
+	if h.testMode {
+		// In test mode, accept a test subscription that includes username
+		type testSubscription struct {
+			Organization string   `json:"organization"`
+			Username     string   `json:"username,omitempty"`
+			EventTypes   []string `json:"event_types,omitempty"`
+			MyEventsOnly bool     `json:"my_events_only,omitempty"`
+		}
+		var testSub testSubscription
+		if err := websocket.JSON.Receive(ws, &testSub); err != nil {
+			log.Printf("failed to receive subscription from %s: %v", ip, err)
+			return sub, err
+		}
+		sub.Organization = testSub.Organization
+		sub.EventTypes = testSub.EventTypes
+		sub.MyEventsOnly = testSub.MyEventsOnly
+		sub.Username = testSub.Username // Preserve username for testing
+		log.Printf("TEST MODE: Received subscription with Username=%q, Organization=%q", sub.Username, sub.Organization)
+	} else {
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			log.Printf("failed to receive subscription from %s: %v", ip, err)
+			return sub, err
+		}
+	}
+
+	return sub, nil
+}
+
+// validateAuth validates the GitHub authentication and organization membership.
+func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn, sub *Subscription, githubToken, ip string) error {
+	if h.testMode {
+		// In test mode, Username is already set from the test subscription
+		return nil
+	}
+
+	logger.Info("validating GitHub authentication and org membership", logger.Fields{
+		"ip":  ip,
+		"org": sub.Organization,
+	})
+
+	// Validate GitHub token and org membership
+	ghClient := github.NewClient(githubToken)
+	username, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
+	if err != nil {
+		logger.Error("GitHub auth failed", err, logger.Fields{
+			"ip":  ip,
+			"org": sub.Organization,
+		})
+
+		// Send error response to client
+		errorResp := map[string]string{
+			"type":  "error",
+			"error": "access_denied",
+			"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
+				"Please ensure you are a member of this organization.", sub.Organization),
+		}
+
+		// Set a write deadline to ensure we don't hang forever
+		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
+			return err
+		}
+
+		if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+			logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
+			return sendErr
+		}
+
+		logger.Info("sent access denied error to client", logger.Fields{"ip": ip, "org": sub.Organization})
+		return errors.New("access denied")
+	}
+
+	logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
+		"ip":       ip,
+		"org":      sub.Organization,
+		"username": username,
+	})
+
+	// Set the authenticated username in subscription
+	sub.Username = username
+	return nil
+}
+
 // Handle handles a WebSocket connection.
 func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Use the request's context for proper lifecycle management
@@ -89,28 +204,9 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Get client IP
 	ip := security.ClientIP(ws.Request())
 
-	var githubToken string
-	if !h.testMode {
-		// Extract GitHub token from Authorization header
-		authHeader := ws.Request().Header.Get("Authorization")
-		if authHeader == "" {
-			logger.Warn("missing Authorization header", logger.Fields{"ip": ip})
-			return
-		}
-
-		// Parse Bearer token
-		const bearerPrefix = "Bearer "
-		if !strings.HasPrefix(authHeader, bearerPrefix) {
-			logger.Warn("invalid Authorization header format", logger.Fields{"ip": ip})
-			return
-		}
-		githubToken = strings.TrimPrefix(authHeader, bearerPrefix)
-
-		// Validate token format: check length constraints and known patterns
-		if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
-			logger.Warn("invalid GitHub token format", logger.Fields{"ip": ip})
-			return
-		}
+	githubToken, ok := h.extractGitHubToken(ws, ip)
+	if !ok {
+		return
 	}
 
 	// Check connection limit
@@ -127,31 +223,9 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	}
 
 	// Read subscription
-	var sub Subscription
-
-	if h.testMode {
-		// In test mode, accept a test subscription that includes username
-		type testSubscription struct {
-			Organization string   `json:"organization"`
-			Username     string   `json:"username,omitempty"`
-			EventTypes   []string `json:"event_types,omitempty"`
-			MyEventsOnly bool     `json:"my_events_only,omitempty"`
-		}
-		var testSub testSubscription
-		if err := websocket.JSON.Receive(ws, &testSub); err != nil {
-			log.Printf("failed to receive subscription from %s: %v", ip, err)
-			return
-		}
-		sub.Organization = testSub.Organization
-		sub.EventTypes = testSub.EventTypes
-		sub.MyEventsOnly = testSub.MyEventsOnly
-		sub.Username = testSub.Username // Preserve username for testing
-		log.Printf("TEST MODE: Received subscription with Username=%q, Organization=%q", sub.Username, sub.Organization)
-	} else {
-		if err := websocket.JSON.Receive(ws, &sub); err != nil {
-			log.Printf("failed to receive subscription from %s: %v", ip, err)
-			return
-		}
+	sub, err := h.readSubscription(ws, ip)
+	if err != nil {
+		return
 	}
 
 	// Reset deadline after successful read
@@ -190,44 +264,10 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		// If allowedEvents is nil, EventTypes remains empty, meaning all events
 	}
 
-	if !h.testMode {
-		logger.Info("validating GitHub authentication and org membership", logger.Fields{
-			"ip":  ip,
-			"org": sub.Organization,
-		})
-
-		// Validate GitHub token and org membership
-		ghClient := github.NewClient(githubToken)
-		username, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
-		if err != nil {
-			logger.Error("GitHub auth failed", err, logger.Fields{
-				"ip":  ip,
-				"org": sub.Organization,
-			})
-
-			// Send error response to client
-			errorResp := map[string]string{
-				"type":  "error",
-				"error": "access_denied",
-				"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
-					"Please ensure you are a member of this organization.", sub.Organization),
-			}
-			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-				logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
-			}
-			return
-		}
-
-		logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
-			"ip":       ip,
-			"org":      sub.Organization,
-			"username": username,
-		})
-
-		// Set the authenticated username in subscription
-		sub.Username = username
+	// Validate authentication and set username
+	if err := h.validateAuth(ctx, ws, &sub, githubToken, ip); err != nil {
+		return
 	}
-	// In test mode, Username is already set from the test subscription
 
 	// Create client with unique ID using crypto-random suffix
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -255,6 +295,33 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		"event_types":    sub.EventTypes,
 		"my_events_only": sub.MyEventsOnly,
 	})
+
+	// Send success response to client immediately after successful subscription
+	successResp := map[string]any{
+		"type":         "subscription_confirmed",
+		"organization": sub.Organization,
+		"username":     sub.Username,
+		"event_types":  sub.EventTypes,
+	}
+
+	// Set a write deadline for the success response
+	if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		logger.Error("failed to set write deadline for success response", err, logger.Fields{"ip": ip})
+		return
+	}
+
+	if err := websocket.JSON.Send(ws, successResp); err != nil {
+		logger.Error("failed to send success response to client", err, logger.Fields{"ip": ip})
+		return
+	}
+
+	// Reset write deadline after successful send
+	if err := ws.SetWriteDeadline(time.Time{}); err != nil {
+		logger.Error("failed to reset write deadline", err, logger.Fields{"ip": ip})
+		return
+	}
+
+	logger.Info("sent subscription confirmation to client", logger.Fields{"ip": ip, "org": sub.Organization})
 
 	// Register client
 	h.hub.Register(client)
