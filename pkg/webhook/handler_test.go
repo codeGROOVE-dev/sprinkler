@@ -22,7 +22,7 @@ func TestWebhookHandler(t *testing.T) {
 	go h.Run(ctx)
 
 	secret := "testsecret"
-	handler := NewHandler(h, secret, nil, nil) // nil allows all events, nil disables IP validation
+	handler := NewHandler(h, secret, nil) // nil allows all events
 
 	// Test invalid method
 	req := httptest.NewRequest(http.MethodGet, "/webhook", http.NoBody)

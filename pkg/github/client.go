@@ -134,11 +134,16 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 // ValidateOrgMembership checks if the authenticated user has access to the specified organization.
 // Returns the authenticated user's username and nil error if successful.
 func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string, error) {
+	log.Printf("GitHub API: Starting authentication and org membership validation for org '%s'", org)
+
 	// First get the authenticated user (already has retry logic)
+	log.Print("GitHub API: Getting authenticated user info...")
 	user, err := c.AuthenticatedUser(ctx)
 	if err != nil {
+		log.Printf("GitHub API: Failed to get authenticated user: %v", err)
 		return "", fmt.Errorf("failed to get authenticated user: %w", err)
 	}
+	log.Printf("GitHub API: Successfully authenticated as user '%s'", user.Login)
 
 	// Sanitize org name
 	org = strings.TrimSpace(org)
@@ -155,6 +160,8 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 
 	var lastErr error
 
+	log.Printf("GitHub API: Checking access to organization '%s' for user '%s'...", org, user.Login)
+
 	// Retry org access check with exponential backoff
 	err = retry.Do(
 		func() error {
@@ -167,6 +174,7 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 			req.Header.Set("Accept", "application/vnd.github.v3+json")
 			req.Header.Set("User-Agent", "webhook-sprinkler/1.0")
 
+			log.Printf("GitHub API: Making request to %s", req.URL.String())
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
@@ -185,12 +193,16 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 				return err // Retry on read errors
 			}
 
+			log.Printf("GitHub API: Received response status %d", resp.StatusCode)
+
 			switch resp.StatusCode {
 			case http.StatusOK:
 				// Successfully accessed the org
+				log.Printf("GitHub API: User '%s' has access to organization '%s'", user.Login, org)
 				return nil
 
 			case http.StatusUnauthorized:
+				log.Print("GitHub API: Token is invalid or expired")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
@@ -206,13 +218,16 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 					Message string `json:"message"`
 				}
 				if err := json.Unmarshal(body, &errResp); err == nil {
+					log.Printf("GitHub API: Access forbidden - %s", errResp.Message)
 					if strings.Contains(errResp.Message, "Not Found") {
 						return retry.Unrecoverable(errors.New("organization not found or not accessible with this token"))
 					}
 				}
+				log.Printf("GitHub API: User '%s' does not have access to organization '%s'", user.Login, org)
 				return retry.Unrecoverable(errors.New("access denied to organization"))
 
 			case http.StatusNotFound:
+				log.Printf("GitHub API: Organization '%s' not found or not accessible", org)
 				return retry.Unrecoverable(errors.New("organization not found or not accessible with this token"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
@@ -232,11 +247,13 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 		retry.Context(ctx),
 	)
 	if err != nil {
+		log.Printf("GitHub API: Org validation failed after retries: %v", err)
 		if lastErr != nil {
 			return "", lastErr
 		}
 		return "", err
 	}
 
+	log.Printf("GitHub API: Validation complete - user '%s' has access to org '%s'", user.Login, org)
 	return user.Login, nil
 }

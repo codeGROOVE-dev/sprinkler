@@ -39,7 +39,6 @@ ws.on('message', (data) => {
 ```bash
 -webhook-secret="..."        # GitHub webhook secret (required)
 -allowed-events="..."        # Event types to allow or "*" for all
--validate-github-ips=true    # Only accept webhooks from GitHub IPs
 -rate-limit=100              # Requests per minute per IP
 -max-conns-per-ip=10         # WebSocket connections per IP
 -max-conns-total=1000        # Total WebSocket connections

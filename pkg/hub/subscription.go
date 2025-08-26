@@ -122,19 +122,10 @@ func matches(sub Subscription, event Event, payload map[string]any) bool {
 	return matchesUser(sub.Username, payload)
 }
 
-// matchesUser checks if a username matches any relevant field in the payload.
-// extractLogin extracts the login from a user object.
-func extractLogin(user map[string]any) (string, bool) {
-	login, ok := user["login"].(string)
-	return login, ok
-}
-
 // matchesUserInObject checks if username matches login in a user object.
 func matchesUserInObject(user map[string]any, username string) bool {
-	if login, ok := extractLogin(user); ok && strings.EqualFold(login, username) {
-		return true
-	}
-	return false
+	login, ok := user["login"].(string)
+	return ok && strings.EqualFold(login, username)
 }
 
 // matchesUserInList checks if username matches any login in a list of user objects.

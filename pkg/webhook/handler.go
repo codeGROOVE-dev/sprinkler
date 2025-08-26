@@ -15,27 +15,20 @@ import (
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
-	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
 )
 
 const maxPayloadSize = 1 << 20 // 1MB
 
 // Handler handles GitHub webhook events.
 type Handler struct {
-	ipValidator      IPValidator
 	hub              *hub.Hub
 	allowedEventsMap map[string]bool
 	secret           string
 	allowedEvents    []string
 }
 
-// IPValidator interface for IP validation.
-type IPValidator interface {
-	IsValid(ip string) bool
-}
-
 // NewHandler creates a new webhook handler.
-func NewHandler(h *hub.Hub, secret string, allowedEvents []string, ipValidator IPValidator) *Handler {
+func NewHandler(h *hub.Hub, secret string, allowedEvents []string) *Handler {
 	// Build map for O(1) event type lookups
 	var allowedMap map[string]bool
 	if allowedEvents != nil {
@@ -50,7 +43,6 @@ func NewHandler(h *hub.Hub, secret string, allowedEvents []string, ipValidator I
 		secret:           secret,
 		allowedEvents:    allowedEvents,
 		allowedEventsMap: allowedMap,
-		ipValidator:      ipValidator,
 	}
 }
 
@@ -70,17 +62,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
-	}
-
-	// Validate source IP if validator is configured
-	if h.ipValidator != nil {
-		// Use secure IP extraction from security package
-		clientIP := security.ClientIP(r)
-		if !h.ipValidator.IsValid(clientIP) {
-			logger.Warn("webhook rejected from non-GitHub IP", logger.Fields{"ip": clientIP})
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
 	}
 
 	eventType := r.Header.Get("X-GitHub-Event") //nolint:canonicalheader // GitHub webhook header

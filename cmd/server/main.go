@@ -29,17 +29,16 @@ const (
 )
 
 var (
-	webhookSecret  = flag.String("webhook-secret", os.Getenv("GITHUB_WEBHOOK_SECRET"), "GitHub webhook secret for signature verification")
-	addr           = flag.String("addr", ":8080", "HTTP service address")
-	letsencrypt    = flag.Bool("letsencrypt", false, "Use Let's Encrypt for automatic TLS certificates")
-	leDomains      = flag.String("le-domains", "", "Comma-separated list of domains for Let's Encrypt certificates")
-	leCacheDir     = flag.String("le-cache-dir", "./.letsencrypt", "Cache directory for Let's Encrypt certificates")
-	leEmail        = flag.String("le-email", "", "Contact email for Let's Encrypt notifications")
-	maxConnsPerIP  = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
-	maxConnsTotal  = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
-	rateLimit      = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
-	validateGitHub = flag.Bool("validate-github-ips", true, "Only accept webhooks from GitHub IP ranges")
-	allowedEvents  = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"),
+	webhookSecret = flag.String("webhook-secret", os.Getenv("GITHUB_WEBHOOK_SECRET"), "GitHub webhook secret for signature verification")
+	addr          = flag.String("addr", ":8080", "HTTP service address")
+	letsencrypt   = flag.Bool("letsencrypt", false, "Use Let's Encrypt for automatic TLS certificates")
+	leDomains     = flag.String("le-domains", "", "Comma-separated list of domains for Let's Encrypt certificates")
+	leCacheDir    = flag.String("le-cache-dir", "./.letsencrypt", "Cache directory for Let's Encrypt certificates")
+	leEmail       = flag.String("le-email", "", "Contact email for Let's Encrypt notifications")
+	maxConnsPerIP = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
+	maxConnsTotal = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
+	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
+	allowedEvents = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"),
 		"Comma-separated list of allowed webhook event types (use '*' for all)")
 	allowedOrigins = flag.String("allowed-origins", os.Getenv("ALLOWED_ORIGINS"),
 		"Comma-separated list of allowed CORS origins (leave empty to disable CORS)")
@@ -95,19 +94,6 @@ func main() {
 	rateLimiter := security.NewRateLimiter(*rateLimit, time.Minute)
 	connLimiter := security.NewConnectionLimiter(*maxConnsPerIP, *maxConnsTotal)
 
-	// Configure GitHub IP validation if enabled
-	var ipValidator webhook.IPValidator
-	if *validateGitHub {
-		validator, err := security.NewGitHubIPValidator(true)
-		if err != nil {
-			cancel()
-			log.Printf("failed to create GitHub IP validator: %v", err)
-			return
-		}
-		ipValidator = validator
-		log.Println("GitHub IP validation enabled for webhooks")
-	}
-
 	mux := http.NewServeMux()
 
 	// Health check endpoint
@@ -124,7 +110,7 @@ func main() {
 	})
 	log.Println("Registered health check handler at /")
 
-	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes, ipValidator)
+	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes)
 	mux.Handle("/webhook", webhookHandler)
 	log.Println("Registered webhook handler at /webhook")
 

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
@@ -136,15 +137,34 @@ func run() error {
 	defer cancel()
 
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+	log.Println("Signal handler set up, press Ctrl+C to stop")
+
+	// Start client in goroutine so we can handle signals
+	errCh := make(chan error, 1)
 	go func() {
-		<-interrupt
-		log.Println("Interrupt received, shutting down gracefully...")
-		cancel()
+		errCh <- c.Start(ctx)
 	}()
 
-	// Start the client
-	return c.Start(ctx)
+	// Wait for either client error or interrupt signal
+	select {
+	case err := <-errCh:
+		return err
+	case sig := <-interrupt:
+		log.Printf("Signal %v received, shutting down gracefully...", sig)
+		c.Stop() // Properly close WebSocket connection
+		cancel()
+
+		// Wait for client to finish with timeout
+		select {
+		case <-errCh:
+			return nil // Client shut down gracefully
+		case <-time.After(5 * time.Second):
+			log.Println("Shutdown timeout exceeded, forcing exit")
+			return nil
+		}
+	}
 }
 
 func main() {

@@ -191,11 +191,19 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	}
 
 	if !h.testMode {
+		logger.Info("validating GitHub authentication and org membership", logger.Fields{
+			"ip":  ip,
+			"org": sub.Organization,
+		})
+
 		// Validate GitHub token and org membership
 		ghClient := github.NewClient(githubToken)
 		username, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
 		if err != nil {
-			logger.Error("GitHub auth failed", err, logger.Fields{"ip": ip, "org": sub.Organization})
+			logger.Error("GitHub auth failed", err, logger.Fields{
+				"ip":  ip,
+				"org": sub.Organization,
+			})
 
 			// Send error response to client
 			errorResp := map[string]string{
@@ -205,10 +213,16 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 					"Please ensure you are a member of this organization.", sub.Organization),
 			}
 			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-				log.Printf("failed to send error response: %v", sendErr)
+				logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
 			}
 			return
 		}
+
+		logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
+			"ip":       ip,
+			"org":      sub.Organization,
+			"username": username,
+		})
 
 		// Set the authenticated username in subscription
 		sub.Username = username

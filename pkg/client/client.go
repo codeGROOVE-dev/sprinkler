@@ -30,15 +30,15 @@ type Event struct {
 
 // Config holds the configuration for the client.
 type Config struct {
-	OnEvent      func(Event)
 	OnConnect    func()
 	OnDisconnect func(error)
-	EventTypes   []string
-	PingInterval time.Duration
-	MaxBackoff   time.Duration
+	OnEvent      func(Event)
 	ServerURL    string
-	Organization string
 	Token        string
+	Organization string
+	EventTypes   []string
+	MaxBackoff   time.Duration
+	PingInterval time.Duration
 	MaxRetries   int
 	MyEventsOnly bool
 	Verbose      bool
@@ -47,13 +47,13 @@ type Config struct {
 
 // Client represents a WebSocket client with automatic reconnection.
 type Client struct {
-	config     Config
 	ws         *websocket.Conn
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
-	mu         sync.RWMutex
+	config     Config
 	eventCount int
 	retries    int
+	mu         sync.RWMutex
 	connected  bool
 }
 
