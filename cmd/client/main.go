@@ -3,11 +3,14 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"time"
@@ -15,22 +18,62 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+// getGitHubToken attempts to get a GitHub token from multiple sources:
+// 1. Command-line flag
+// 2. GITHUB_TOKEN environment variable
+// 3. gh auth token command.
+func getGitHubToken(flagToken string) (string, error) {
+	// First try flag
+	if flagToken != "" {
+		return flagToken, nil
+	}
+
+	// Then try environment variable
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		log.Println("Using token from GITHUB_TOKEN environment variable")
+		return token, nil
+	}
+
+	// Finally try gh auth token
+	log.Println("No token provided, attempting to use gh auth token")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get token from 'gh auth token': %w\n"+
+			"Please provide a token via -token flag, GITHUB_TOKEN env var, or authenticate with 'gh auth login'", err)
+	}
+
+	token := strings.TrimSpace(string(output))
+	if token == "" {
+		return "", errors.New("gh auth token returned empty token")
+	}
+
+	log.Println("Using token from gh auth token")
+	return token, nil
+}
+
 func run() error {
 	var (
 		serverAddr = flag.String("addr", "localhost:8080", "server address")
 		org        = flag.String("org", "", "GitHub organization to subscribe to")
 		token      = flag.String("token", "", "GitHub personal access token")
 		myEvents   = flag.Bool("my-events", false, "Only receive events for authenticated user")
-		eventTypes = flag.String("events", "", "Comma-separated list of event types to subscribe to")
+		eventTypes = flag.String("events", "", "Comma-separated list of event types to subscribe to (use '*' for all)")
 		useTLS     = flag.Bool("tls", false, "Use TLS (wss://)")
+		verbose    = flag.Bool("verbose", false, "Show full event details")
 	)
 	flag.Parse()
 
 	if *org == "" {
 		return errors.New("organization required: -org")
 	}
-	if *token == "" {
-		return errors.New("GitHub token required: -token")
+
+	// Get token from various sources
+	githubToken, err := getGitHubToken(*token)
+	if err != nil {
+		return err
 	}
 
 	interrupt := make(chan os.Signal, 1)
@@ -52,7 +95,7 @@ func run() error {
 
 	// Add Authorization header with Bearer token
 	config.Header = make(map[string][]string)
-	config.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", *token)}
+	config.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", githubToken)}
 
 	ws, err := websocket.DialConfig(config)
 	if err != nil {
@@ -72,11 +115,18 @@ func run() error {
 
 	// Add event types if specified
 	if *eventTypes != "" {
-		types := strings.Split(*eventTypes, ",")
-		for i, t := range types {
-			types[i] = strings.TrimSpace(t)
+		// Handle special case of '*' for all events
+		if *eventTypes == "*" {
+			// Don't send event_types field - server will interpret as "all"
+			log.Println("Subscribing to all event types")
+		} else {
+			types := strings.Split(*eventTypes, ",")
+			for i, t := range types {
+				types[i] = strings.TrimSpace(t)
+			}
+			sub["event_types"] = types
+			log.Printf("Subscribing to event types: %v", types)
 		}
-		sub["event_types"] = types
 	}
 
 	if err := websocket.JSON.Send(ws, sub); err != nil {
@@ -89,16 +139,52 @@ func run() error {
 	go func() {
 		defer close(done)
 		for {
-			var event struct {
-				URL       string    `json:"url"`
-				Timestamp time.Time `json:"timestamp"`
-				Type      string    `json:"type"`
-			}
-			if err := websocket.JSON.Receive(ws, &event); err != nil {
+			// Receive the full response structure
+			var response map[string]any
+			if err := websocket.JSON.Receive(ws, &response); err != nil {
 				log.Println("read:", err)
 				return
 			}
-			fmt.Printf("[%s] %s: %s\n", event.Timestamp.Format("15:04:05"), event.Type, event.URL)
+
+			// Extract common fields if they exist
+			timestamp := ""
+			if ts, ok := response["timestamp"].(string); ok {
+				// Parse and format timestamp
+				if t, err := time.Parse(time.RFC3339, ts); err == nil {
+					timestamp = t.Format("15:04:05")
+				} else {
+					timestamp = ts
+				}
+			}
+
+			eventType := ""
+			if et, ok := response["type"].(string); ok {
+				eventType = et
+			}
+
+			url := ""
+			if u, ok := response["url"].(string); ok {
+				url = u
+			}
+
+			// Display based on verbosity
+			if *verbose {
+				// Pretty print the full JSON response
+				fmt.Printf("\n=== Event at %s ===\n", timestamp)
+				fmt.Printf("Type: %s\n", eventType)
+				fmt.Printf("URL: %s\n", url)
+				fmt.Println("Full response:")
+				prettyPrintJSON(response)
+				fmt.Println()
+			} else {
+				// Compact single-line format
+				if eventType != "" && url != "" {
+					fmt.Printf("[%s] %s: %s\n", timestamp, eventType, url)
+				} else {
+					// Fallback to showing whatever we received
+					fmt.Printf("[%s] Event received: %v\n", timestamp, response)
+				}
+			}
 		}
 	}()
 
@@ -111,6 +197,17 @@ func run() error {
 			return nil
 		}
 	}
+}
+
+// prettyPrintJSON prints a JSON object in a formatted, indented way.
+func prettyPrintJSON(data map[string]any) {
+	jsonBytes, err := json.MarshalIndent(data, "  ", "  ")
+	if err != nil {
+		// Fallback to simple print if marshaling fails
+		fmt.Printf("  %v\n", data)
+		return
+	}
+	fmt.Printf("  %s\n", string(jsonBytes))
 }
 
 func main() {

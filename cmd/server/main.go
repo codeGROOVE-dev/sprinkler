@@ -109,11 +109,28 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+
+	// Health check endpoint
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Request to %s from %s", r.URL.Path, r.RemoteAddr)
+		if r.URL.Path == "/" {
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write([]byte("webhook-sprinkler is running\n")); err != nil {
+				log.Printf("failed to write response: %v", err)
+			}
+			return
+		}
+		http.NotFound(w, r)
+	})
+	log.Println("Registered health check handler at /")
+
 	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes, ipValidator)
 	mux.Handle("/webhook", webhookHandler)
+	log.Println("Registered webhook handler at /webhook")
 
 	wsHandler := hub.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
 	mux.Handle("/ws", websocket.Handler(wsHandler.Handle))
+	log.Println("Registered WebSocket handler at /ws")
 
 	// Apply combined middleware with allowed origins
 	handler := security.CombinedMiddleware(rateLimiter, corsOrigins)(mux)

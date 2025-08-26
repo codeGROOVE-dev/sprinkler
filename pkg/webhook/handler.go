@@ -56,6 +56,17 @@ func NewHandler(h *hub.Hub, secret string, allowedEvents []string, ipValidator I
 
 // ServeHTTP processes GitHub webhook events.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Log incoming webhook request details
+	logger.Info("webhook request received", logger.Fields{
+		"method":       r.Method,
+		"url":          r.URL.String(),
+		"remote_addr":  r.RemoteAddr,
+		"user_agent":   r.UserAgent(),
+		"content_type": r.Header.Get("Content-Type"),
+		"event_type":   r.Header.Get("X-GitHub-Event"),    //nolint:canonicalheader // GitHub webhook header
+		"delivery_id":  r.Header.Get("X-GitHub-Delivery"), //nolint:canonicalheader // GitHub webhook header
+	})
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
