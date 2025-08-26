@@ -11,6 +11,7 @@ GitHub only allows one webhook endpoint per app. This service multiplexes that s
 ```bash
 export GITHUB_WEBHOOK_SECRET="your-webhook-secret"
 go run ./cmd/server
+go run ./cmd/client
 ```
 
 ## Client example
