@@ -15,8 +15,8 @@ type Client struct {
 	send         chan Event
 	hub          *Hub
 	done         chan struct{}
-	subscription Subscription
 	ID           string
+	subscription Subscription
 	closeOnce    sync.Once
 }
 

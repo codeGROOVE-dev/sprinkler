@@ -6,14 +6,14 @@ func TestExtractPRURL(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType string
-		payload   map[string]interface{}
+		payload   map[string]any
 		want      string
 	}{
 		{
 			name:      "pull_request event",
 			eventType: "pull_request",
-			payload: map[string]interface{}{
-				"pull_request": map[string]interface{}{
+			payload: map[string]any{
+				"pull_request": map[string]any{
 					"html_url": "https://github.com/user/repo/pull/1",
 				},
 			},
@@ -22,10 +22,10 @@ func TestExtractPRURL(t *testing.T) {
 		{
 			name:      "issue_comment on PR",
 			eventType: "issue_comment",
-			payload: map[string]interface{}{
-				"issue": map[string]interface{}{
+			payload: map[string]any{
+				"issue": map[string]any{
 					"html_url":     "https://github.com/user/repo/pull/2",
-					"pull_request": map[string]interface{}{},
+					"pull_request": map[string]any{},
 				},
 			},
 			want: "https://github.com/user/repo/pull/2",
@@ -33,8 +33,8 @@ func TestExtractPRURL(t *testing.T) {
 		{
 			name:      "issue_comment on issue (not PR)",
 			eventType: "issue_comment",
-			payload: map[string]interface{}{
-				"issue": map[string]interface{}{
+			payload: map[string]any{
+				"issue": map[string]any{
 					"html_url": "https://github.com/user/repo/issues/3",
 				},
 			},
@@ -43,10 +43,10 @@ func TestExtractPRURL(t *testing.T) {
 		{
 			name:      "check_run with PR",
 			eventType: "check_run",
-			payload: map[string]interface{}{
-				"check_run": map[string]interface{}{
-					"pull_requests": []interface{}{
-						map[string]interface{}{
+			payload: map[string]any{
+				"check_run": map[string]any{
+					"pull_requests": []any{
+						map[string]any{
 							"html_url": "https://github.com/user/repo/pull/4",
 						},
 					},
@@ -57,10 +57,10 @@ func TestExtractPRURL(t *testing.T) {
 		{
 			name:      "check_suite with PR",
 			eventType: "check_suite",
-			payload: map[string]interface{}{
-				"check_suite": map[string]interface{}{
-					"pull_requests": []interface{}{
-						map[string]interface{}{
+			payload: map[string]any{
+				"check_suite": map[string]any{
+					"pull_requests": []any{
+						map[string]any{
 							"html_url": "https://github.com/user/repo/pull/5",
 						},
 					},
@@ -71,7 +71,7 @@ func TestExtractPRURL(t *testing.T) {
 		{
 			name:      "unsupported event type",
 			eventType: "push",
-			payload:   map[string]interface{}{},
+			payload:   map[string]any{},
 			want:      "",
 		},
 	}

@@ -16,6 +16,10 @@ import (
 	"github.com/codeGROOVE-dev/retry"
 )
 
+const (
+	clientTimeout = 10 * time.Second
+)
+
 // Client provides GitHub API functionality.
 type Client struct {
 	httpClient *http.Client
@@ -26,7 +30,7 @@ type Client struct {
 func NewClient(token string) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: clientTimeout,
 		},
 		token: token,
 	}
@@ -144,7 +148,7 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 
 	// Validate org name format (GitHub org names can only contain alphanumeric, hyphen, underscore)
 	for _, r := range org {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' {
 			return "", errors.New("invalid organization name format")
 		}
 	}

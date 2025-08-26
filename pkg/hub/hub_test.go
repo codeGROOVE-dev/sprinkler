@@ -49,14 +49,14 @@ func TestHub(t *testing.T) {
 		Type:      "pull_request",
 	}
 
-	payload := map[string]interface{}{
-		"repository": map[string]interface{}{
-			"owner": map[string]interface{}{
+	payload := map[string]any{
+		"repository": map[string]any{
+			"owner": map[string]any{
 				"login": "myorg",
 			},
 		},
-		"pull_request": map[string]interface{}{
-			"user": map[string]interface{}{
+		"pull_request": map[string]any{
+			"user": map[string]any{
 				"login": "alice",
 			},
 			"html_url": "https://github.com/myorg/repo/pull/1",

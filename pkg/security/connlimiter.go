@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+const (
+	staleTimeout = 10 * time.Minute // Time after which inactive entries are considered stale
+)
+
 // connectionInfo tracks connection count and last activity time.
 type connectionInfo struct {
 	lastActive time.Time
@@ -98,7 +102,7 @@ func (cl *ConnectionLimiter) cleanup() {
 	defer cl.mu.Unlock()
 
 	now := time.Now()
-	staleTimeout := 10 * time.Minute
+	// Use the constant defined at package level
 	cleaned := 0
 
 	for ip, info := range cl.perIP {

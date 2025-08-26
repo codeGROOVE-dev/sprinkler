@@ -65,7 +65,7 @@ func run() error {
 	}()
 
 	// Send subscription
-	sub := map[string]interface{}{
+	sub := map[string]any{
 		"organization":   *org,
 		"my_events_only": *myEvents,
 	}

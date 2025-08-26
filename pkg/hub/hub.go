@@ -32,7 +32,7 @@ type Hub struct {
 
 // broadcastMsg contains an event and the payload for matching.
 type broadcastMsg struct {
-	payload map[string]interface{}
+	payload map[string]any
 	event   Event
 }
 
@@ -112,12 +112,12 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 // Broadcast sends an event to all matching clients.
-func (h *Hub) Broadcast(event Event, payload map[string]interface{}) {
+func (h *Hub) Broadcast(event Event, payload map[string]any) {
 	select {
 	case h.broadcast <- broadcastMsg{event: event, payload: payload}:
 	default:
 		// Hub is at capacity or shutting down, drop the message
-		log.Printf("dropping broadcast: hub at capacity or shutting down")
+		log.Print("dropping broadcast: hub at capacity or shutting down")
 	}
 }
 

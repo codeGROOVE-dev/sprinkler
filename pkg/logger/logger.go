@@ -9,10 +9,10 @@ import (
 )
 
 // Fields represents structured log fields.
-type Fields map[string]interface{}
+type Fields map[string]any
 
 // WithFields adds structured context to log messages.
-func WithFields(fields Fields, format string, args ...interface{}) {
+func WithFields(fields Fields, format string, args ...any) {
 	var parts []string
 	for k, v := range fields {
 		parts = append(parts, fmt.Sprintf("%s=%v", k, v))

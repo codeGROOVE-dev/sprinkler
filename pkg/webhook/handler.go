@@ -113,7 +113,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse payload
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		logger.Error("error parsing webhook payload", err, logger.Fields{"delivery_id": deliveryID})
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -167,17 +167,17 @@ func VerifySignature(payload []byte, signature, secret string) bool {
 }
 
 // ExtractPRURL extracts the pull request URL from various event types.
-func ExtractPRURL(eventType string, payload map[string]interface{}) string {
+func ExtractPRURL(eventType string, payload map[string]any) string {
 	switch eventType {
 	case "pull_request", "pull_request_review", "pull_request_review_comment":
-		if pr, ok := payload["pull_request"].(map[string]interface{}); ok {
+		if pr, ok := payload["pull_request"].(map[string]any); ok {
 			if htmlURL, ok := pr["html_url"].(string); ok {
 				return htmlURL
 			}
 		}
 	case "issue_comment":
 		// issue_comment events can be on PRs too
-		if issue, ok := payload["issue"].(map[string]interface{}); ok {
+		if issue, ok := payload["issue"].(map[string]any); ok {
 			if _, isPR := issue["pull_request"]; isPR {
 				if htmlURL, ok := issue["html_url"].(string); ok {
 					return htmlURL
@@ -186,24 +186,26 @@ func ExtractPRURL(eventType string, payload map[string]interface{}) string {
 		}
 	case "check_run", "check_suite":
 		// Extract PR URLs from check events if available
-		if checkRun, ok := payload["check_run"].(map[string]interface{}); ok {
-			if prs, ok := checkRun["pull_requests"].([]interface{}); ok && len(prs) > 0 {
-				if pr, ok := prs[0].(map[string]interface{}); ok {
+		if checkRun, ok := payload["check_run"].(map[string]any); ok {
+			if prs, ok := checkRun["pull_requests"].([]any); ok && len(prs) > 0 {
+				if pr, ok := prs[0].(map[string]any); ok {
 					if htmlURL, ok := pr["html_url"].(string); ok {
 						return htmlURL
 					}
 				}
 			}
 		}
-		if checkSuite, ok := payload["check_suite"].(map[string]interface{}); ok {
-			if prs, ok := checkSuite["pull_requests"].([]interface{}); ok && len(prs) > 0 {
-				if pr, ok := prs[0].(map[string]interface{}); ok {
+		if checkSuite, ok := payload["check_suite"].(map[string]any); ok {
+			if prs, ok := checkSuite["pull_requests"].([]any); ok && len(prs) > 0 {
+				if pr, ok := prs[0].(map[string]any); ok {
 					if htmlURL, ok := pr["html_url"].(string); ok {
 						return htmlURL
 					}
 				}
 			}
 		}
+	default:
+		// For other event types, no PR URL can be extracted
 	}
 	return ""
 }

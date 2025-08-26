@@ -9,23 +9,23 @@ func TestMatches(t *testing.T) {
 		name    string
 		sub     Subscription
 		event   Event
-		payload map[string]interface{}
+		payload map[string]any
 		want    bool
 	}{
 		{
 			name:    "no organization matches nothing",
 			sub:     Subscription{},
 			event:   Event{URL: "https://github.com/myorg/repo/pull/1"},
-			payload: map[string]interface{}{},
+			payload: map[string]any{},
 			want:    false,
 		},
 		{
 			name:  "organization match via repository owner",
 			sub:   Subscription{Organization: "myorg"},
 			event: Event{URL: "https://github.com/myorg/repo/pull/1"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -36,9 +36,9 @@ func TestMatches(t *testing.T) {
 			name:  "organization match case-insensitive",
 			sub:   Subscription{Organization: "MyOrg"},
 			event: Event{URL: "https://github.com/myorg/repo/pull/1"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -49,9 +49,9 @@ func TestMatches(t *testing.T) {
 			name:  "organization no match",
 			sub:   Subscription{Organization: "otherorg"},
 			event: Event{URL: "https://github.com/myorg/repo/pull/1"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -62,8 +62,8 @@ func TestMatches(t *testing.T) {
 			name:  "organization match via organization field",
 			sub:   Subscription{Organization: "myorg"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"organization": map[string]interface{}{
+			payload: map[string]any{
+				"organization": map[string]any{
 					"login": "myorg",
 				},
 			},
@@ -73,14 +73,14 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches PR author",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"pull_request": map[string]interface{}{
-					"user": map[string]interface{}{
+				"pull_request": map[string]any{
+					"user": map[string]any{
 						"login": "alice",
 					},
 				},
@@ -91,14 +91,14 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - no match for different user",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"pull_request": map[string]interface{}{
-					"user": map[string]interface{}{
+				"pull_request": map[string]any{
+					"user": map[string]any{
 						"login": "bob",
 					},
 				},
@@ -109,14 +109,14 @@ func TestMatches(t *testing.T) {
 			name:  "all org events - matches any user",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: false},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"pull_request": map[string]interface{}{
-					"user": map[string]interface{}{
+				"pull_request": map[string]any{
+					"user": map[string]any{
 						"login": "bob",
 					},
 				},
@@ -127,18 +127,18 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches assignee",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"pull_request": map[string]interface{}{
-					"user": map[string]interface{}{
+				"pull_request": map[string]any{
+					"user": map[string]any{
 						"login": "bob",
 					},
-					"assignees": []interface{}{
-						map[string]interface{}{"login": "alice"},
+					"assignees": []any{
+						map[string]any{"login": "alice"},
 					},
 				},
 			},
@@ -148,18 +148,18 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches reviewer",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"pull_request": map[string]interface{}{
-					"user": map[string]interface{}{
+				"pull_request": map[string]any{
+					"user": map[string]any{
 						"login": "bob",
 					},
-					"requested_reviewers": []interface{}{
-						map[string]interface{}{"login": "alice"},
+					"requested_reviewers": []any{
+						map[string]any{"login": "alice"},
 					},
 				},
 			},
@@ -169,14 +169,14 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches review author",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"review": map[string]interface{}{
-					"user": map[string]interface{}{
+				"review": map[string]any{
+					"user": map[string]any{
 						"login": "alice",
 					},
 				},
@@ -187,14 +187,14 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches comment author",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"comment": map[string]interface{}{
-					"user": map[string]interface{}{
+				"comment": map[string]any{
+					"user": map[string]any{
 						"login": "alice",
 					},
 					"body": "This looks good",
@@ -206,14 +206,14 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches mention",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"comment": map[string]interface{}{
-					"user": map[string]interface{}{
+				"comment": map[string]any{
+					"user": map[string]any{
 						"login": "bob",
 					},
 					"body": "Hey @alice, can you review this?",
@@ -225,9 +225,9 @@ func TestMatches(t *testing.T) {
 			name:  "event type filter matches",
 			sub:   Subscription{Organization: "myorg", EventTypes: []string{"pull_request", "issue_comment"}},
 			event: Event{Type: "pull_request"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -238,9 +238,9 @@ func TestMatches(t *testing.T) {
 			name:  "event type filter does not match",
 			sub:   Subscription{Organization: "myorg", EventTypes: []string{"pull_request", "issue_comment"}},
 			event: Event{Type: "push"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -251,9 +251,9 @@ func TestMatches(t *testing.T) {
 			name:  "no event type filter matches any",
 			sub:   Subscription{Organization: "myorg"},
 			event: Event{Type: "push"},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
@@ -264,13 +264,13 @@ func TestMatches(t *testing.T) {
 			name:  "my events only - matches sender",
 			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 			event: Event{},
-			payload: map[string]interface{}{
-				"repository": map[string]interface{}{
-					"owner": map[string]interface{}{
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
 						"login": "myorg",
 					},
 				},
-				"sender": map[string]interface{}{
+				"sender": map[string]any{
 					"login": "alice",
 				},
 			},

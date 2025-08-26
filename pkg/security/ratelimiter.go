@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+const (
+	maxBuckets = 10000 // Limit to 10k unique IPs to prevent memory exhaustion
+)
+
 // RateLimiter implements a simple token bucket rate limiter.
 type RateLimiter struct {
 	buckets    map[string]*bucket
@@ -25,7 +29,7 @@ func NewRateLimiter(maxTokens int, _ time.Duration) *RateLimiter {
 	rl := &RateLimiter{
 		buckets:    make(map[string]*bucket),
 		maxTokens:  maxTokens,
-		maxBuckets: 10000, // Limit to 10k unique IPs to prevent memory exhaustion
+		maxBuckets: maxBuckets,
 		stopCh:     make(chan struct{}),
 	}
 

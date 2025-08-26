@@ -33,11 +33,11 @@ func TestWebhookHandler(t *testing.T) {
 	}
 
 	// Test valid webhook
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"action": "opened",
-		"pull_request": map[string]interface{}{
+		"pull_request": map[string]any{
 			"html_url": "https://github.com/user/repo/pull/1",
-			"user": map[string]interface{}{
+			"user": map[string]any{
 				"login": "testuser",
 			},
 		},

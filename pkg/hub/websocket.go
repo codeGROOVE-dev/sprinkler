@@ -19,9 +19,12 @@ import (
 
 // Constants for WebSocket timeouts.
 const (
-	pingInterval = 54 * time.Second
-	readDeadline = 60 * time.Second
-	writeTimeout = 10 * time.Second
+	pingInterval   = 54 * time.Second
+	readDeadline   = 60 * time.Second
+	writeTimeout   = 10 * time.Second
+	minTokenLength = 40  // Minimum GitHub token length
+	maxTokenLength = 255 // Maximum GitHub token length
+	charsetLength  = 8   // Length of random suffix for client ID
 )
 
 // GitHub token validation regex
@@ -30,7 +33,10 @@ const (
 // - gho_* (OAuth tokens)
 // - ghs_* (GitHub server tokens)
 // - github_pat_* (Fine-grained PATs).
-var githubTokenPattern = regexp.MustCompile(`^(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{36,255}|[a-zA-Z0-9]{40})$`)
+var githubTokenPattern = regexp.MustCompile(
+	`^(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|` +
+		`github_pat_[a-zA-Z0-9_]{36,255}|[a-zA-Z0-9]{40})$`,
+)
 
 // WebSocketHandler handles WebSocket connections.
 type WebSocketHandler struct {
@@ -101,7 +107,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		githubToken = strings.TrimPrefix(authHeader, bearerPrefix)
 
 		// Validate token format: check length constraints and known patterns
-		if len(githubToken) < 40 || len(githubToken) > 255 || !githubTokenPattern.MatchString(githubToken) {
+		if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
 			logger.Warn("invalid GitHub token format", logger.Fields{"ip": ip})
 			return
 		}
@@ -195,15 +201,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 
 		// Set the authenticated username in subscription
 		sub.Username = username
-
-		// Clear the client from memory - we don't need it anymore
-		ghClient = nil
 	}
 	// In test mode, Username is already set from the test subscription
 
 	// Create client with unique ID using crypto-random suffix
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	suffix := make([]byte, 8)
+	suffix := make([]byte, charsetLength)
 	for i := range suffix {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
@@ -245,7 +248,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 	for {
-		var msg interface{}
+		var msg any
 		err := websocket.JSON.Receive(ws, &msg)
 		if err != nil {
 			break
