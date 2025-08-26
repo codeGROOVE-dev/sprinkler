@@ -4,6 +4,19 @@
   <img src="media/logo-small.png" alt="webhook-sprinkler logo" width="300">
 </div>
 
+<div align="center">
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/codeGROOVE-dev/sprinkler.svg)](https://pkg.go.dev/github.com/codeGROOVE-dev/sprinkler)
+[![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/sprinkler)](https://goreportcard.com/report/github.com/codeGROOVE-dev/sprinkler)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/sprinkler)](https://go.dev/)
+[![Release](https://img.shields.io/github/v/release/codeGROOVE-dev/sprinkler?include_prereleases)](https://github.com/codeGROOVE-dev/sprinkler/releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/codeGROOVE-dev/sprinkler/ci.yml?branch=main)](https://github.com/codeGROOVE-dev/sprinkler/actions)
+[![codecov](https://codecov.io/gh/codeGROOVE-dev/sprinkler/branch/main/graph/badge.svg)](https://codecov.io/gh/codeGROOVE-dev/sprinkler)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/codeGROOVE-dev/sprinkler/pulls)
+
+</div>
+
 GitHub only allows one webhook endpoint per app. This service multiplexes that single webhook into authenticated WebSocket connections, so multiple clients can subscribe to just the events they care about.
 
 ## Quick start
