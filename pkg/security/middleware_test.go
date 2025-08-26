@@ -5,16 +5,15 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
 )
 
 func TestCombinedMiddleware_SecurityHeaders(t *testing.T) {
 	rl := NewRateLimiter(10, time.Minute)
-	handler := CombinedMiddleware(rl)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CombinedMiddleware(rl, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:12345"
 	w := httptest.NewRecorder()
 
@@ -36,13 +35,13 @@ func TestCombinedMiddleware_SecurityHeaders(t *testing.T) {
 func TestCombinedMiddleware_RateLimit(t *testing.T) {
 	rl := NewRateLimiter(2, time.Minute)
 
-	handler := CombinedMiddleware(rl)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CombinedMiddleware(rl, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	// First two requests should succeed
-	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+	for i := range 2 {
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.RemoteAddr = "192.168.1.1:12345"
 		w := httptest.NewRecorder()
 
@@ -53,7 +52,7 @@ func TestCombinedMiddleware_RateLimit(t *testing.T) {
 	}
 
 	// Third request should be rate limited
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:12345"
 	w := httptest.NewRecorder()
 

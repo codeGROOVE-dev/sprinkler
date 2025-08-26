@@ -1,26 +1,32 @@
 package hub
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
 func TestHub(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	hub := NewHub()
-	go hub.Run()
+	go hub.Run(ctx)
 
-	// Test registering clients
-	client1 := &Client{
-		id:           "client1",
-		subscription: Subscription{Username: "alice"},
-		send:         make(chan Event, 10),
-	}
+	// Test registering clients - properly initialize using NewClient
+	client1 := NewClient(
+		"client1",
+		Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+		nil, // No websocket connection for unit test
+		hub,
+	)
 
-	client2 := &Client{
-		id:           "client2",
-		subscription: Subscription{PRURL: "https://github.com/user/repo/pull/1"},
-		send:         make(chan Event, 10),
-	}
+	client2 := NewClient(
+		"client2",
+		Subscription{Organization: "myorg"},
+		nil, // No websocket connection for unit test
+		hub,
+	)
 
 	hub.register <- client1
 	hub.register <- client2
@@ -38,17 +44,22 @@ func TestHub(t *testing.T) {
 
 	// Test broadcast
 	event := Event{
-		URL:       "https://github.com/user/repo/pull/1",
+		URL:       "https://github.com/myorg/repo/pull/1",
 		Timestamp: time.Now(),
 		Type:      "pull_request",
 	}
 
 	payload := map[string]interface{}{
+		"repository": map[string]interface{}{
+			"owner": map[string]interface{}{
+				"login": "myorg",
+			},
+		},
 		"pull_request": map[string]interface{}{
 			"user": map[string]interface{}{
 				"login": "alice",
 			},
-			"html_url": "https://github.com/user/repo/pull/1",
+			"html_url": "https://github.com/myorg/repo/pull/1",
 		},
 	}
 

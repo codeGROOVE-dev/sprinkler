@@ -37,11 +37,11 @@ func TestVerifySignature(t *testing.T) {
 			want:      false,
 		},
 		{
-			name:      "empty secret allows any signature",
+			name:      "empty secret rejects signature",
 			payload:   []byte(`{"test": "data"}`),
 			signature: "sha256=anything",
 			secret:    "",
-			want:      true,
+			want:      false,
 		},
 	}
 

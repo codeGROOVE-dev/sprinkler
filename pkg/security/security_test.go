@@ -5,16 +5,15 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
 )
 
 func TestRateLimiter(t *testing.T) {
 	rl := NewRateLimiter(5, time.Second)
-	
+
 	ip := "192.168.1.1"
 
 	// Should allow first 5 requests
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !rl.Allow(ip) {
 			t.Errorf("request %d should be allowed", i+1)
 		}
@@ -66,7 +65,7 @@ func TestConnectionLimiter(t *testing.T) {
 	}
 }
 
-func TestGetClientIP(t *testing.T) {
+func TestClientIP(t *testing.T) {
 	tests := []struct {
 		name       string
 		headers    map[string]string
@@ -104,23 +103,23 @@ func TestGetClientIP(t *testing.T) {
 			want:       "192.168.1.1",
 		},
 		{
-			name: "no port in RemoteAddr",
-			headers: map[string]string{},
+			name:       "no port in RemoteAddr",
+			headers:    map[string]string{},
 			remoteAddr: "192.168.1.1",
-			want:       "",
+			want:       "192.168.1.1", // Should return the IP even without port
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			for k, v := range tt.headers {
 				req.Header.Set(k, v)
 			}
 
-			if got := GetClientIP(req); got != tt.want {
-				t.Errorf("GetClientIP() = %v, want %v", got, tt.want)
+			if got := ClientIP(req); got != tt.want {
+				t.Errorf("ClientIP() = %v, want %v", got, tt.want)
 			}
 		})
 	}

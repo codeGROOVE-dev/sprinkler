@@ -1,28 +1,36 @@
+// Package main provides a command-line client for subscribing to GitHub webhook events
+// via WebSocket connections to a webhook sprinkler server.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
 )
 
-func main() {
+func run() error {
 	var (
 		serverAddr = flag.String("addr", "localhost:8080", "server address")
-		username   = flag.String("username", "", "GitHub username to subscribe to")
-		prURL      = flag.String("pr", "", "Pull request URL to subscribe to")
-		repository = flag.String("repo", "", "Repository URL to subscribe to")
+		org        = flag.String("org", "", "GitHub organization to subscribe to")
+		token      = flag.String("token", "", "GitHub personal access token")
+		myEvents   = flag.Bool("my-events", false, "Only receive events for authenticated user")
+		eventTypes = flag.String("events", "", "Comma-separated list of event types to subscribe to")
 		useTLS     = flag.Bool("tls", false, "Use TLS (wss://)")
 	)
 	flag.Parse()
 
-	if *username == "" && *prURL == "" && *repository == "" {
-		log.Fatal("At least one subscription criteria required: -username, -pr, or -repo")
+	if *org == "" {
+		return errors.New("organization required: -org")
+	}
+	if *token == "" {
+		return errors.New("GitHub token required: -token")
 	}
 
 	interrupt := make(chan os.Signal, 1)
@@ -39,29 +47,40 @@ func main() {
 
 	config, err := websocket.NewConfig(url, origin)
 	if err != nil {
-		log.Fatal("config:", err)
+		return fmt.Errorf("config: %w", err)
 	}
-	
+
+	// Add Authorization header with Bearer token
+	config.Header = make(map[string][]string)
+	config.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", *token)}
+
 	ws, err := websocket.DialConfig(config)
 	if err != nil {
-		log.Fatal("dial:", err)
+		return fmt.Errorf("dial: %w", err)
 	}
-	defer ws.Close()
+	defer func() {
+		if err := ws.Close(); err != nil {
+			log.Printf("failed to close websocket: %v", err)
+		}
+	}()
 
 	// Send subscription
-	sub := map[string]string{}
-	if *username != "" {
-		sub["username"] = *username
+	sub := map[string]interface{}{
+		"organization":   *org,
+		"my_events_only": *myEvents,
 	}
-	if *prURL != "" {
-		sub["pr_url"] = *prURL
-	}
-	if *repository != "" {
-		sub["repository"] = *repository
+
+	// Add event types if specified
+	if *eventTypes != "" {
+		types := strings.Split(*eventTypes, ",")
+		for i, t := range types {
+			types[i] = strings.TrimSpace(t)
+		}
+		sub["event_types"] = types
 	}
 
 	if err := websocket.JSON.Send(ws, sub); err != nil {
-		log.Fatal("write subscription:", err)
+		return fmt.Errorf("write subscription: %w", err)
 	}
 	log.Printf("subscribed with: %+v", sub)
 
@@ -86,10 +105,16 @@ func main() {
 	for {
 		select {
 		case <-done:
-			return
+			return nil
 		case <-interrupt:
 			log.Println("interrupt")
-			return
+			return nil
 		}
+	}
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
 }

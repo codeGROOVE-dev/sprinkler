@@ -1,3 +1,5 @@
+// Package hub provides a WebSocket hub for managing client connections and broadcasting
+// GitHub webhook events to subscribed clients based on their subscription criteria.
 package hub
 
 import (
@@ -19,54 +21,59 @@ type Event struct {
 // It runs in its own goroutine and handles client registration,
 // unregistration, and event distribution.
 type Hub struct {
-	mu         sync.RWMutex          // Protects clients map
-	clients    map[string]*Client    // Connected clients by ID
-	register   chan *Client          // Register requests from clients
-	unregister chan string           // Unregister requests from clients
-	broadcast  chan broadcastMsg     // Events to broadcast
-	ctx        context.Context       // For graceful shutdown
-	cancel     context.CancelFunc    // Cancel function for shutdown
+	clients    map[string]*Client
+	register   chan *Client
+	unregister chan string
+	broadcast  chan broadcastMsg
+	stop       chan struct{}
+	stopped    chan struct{}
+	mu         sync.RWMutex
 }
 
 // broadcastMsg contains an event and the payload for matching.
 type broadcastMsg struct {
-	event   Event
 	payload map[string]interface{}
+	event   Event
 }
 
 // NewHub creates a new client hub.
 func NewHub() *Hub {
-	ctx, cancel := context.WithCancel(context.Background())
 	return &Hub{
 		clients:    make(map[string]*Client),
 		register:   make(chan *Client),
 		unregister: make(chan string),
 		broadcast:  make(chan broadcastMsg),
-		ctx:        ctx,
-		cancel:     cancel,
+		stop:       make(chan struct{}),
+		stopped:    make(chan struct{}),
 	}
 }
 
 // Run starts the hub's event loop.
-func (h *Hub) Run() {
-	
+// The context should be passed from main for proper lifecycle management.
+func (h *Hub) Run(ctx context.Context) {
+	defer close(h.stopped)
+	defer h.cleanup()
+
 	for {
 		select {
-		case <-h.ctx.Done():
+		case <-ctx.Done():
 			log.Println("hub shutting down")
 			return
-			
+		case <-h.stop:
+			log.Println("hub stop requested")
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
-			h.clients[client.id] = client
+			h.clients[client.ID] = client
 			h.mu.Unlock()
-			log.Printf("client registered: id=%s", client.id)
+			log.Printf("client registered: id=%s", client.ID)
 
 		case clientID := <-h.unregister:
 			h.mu.Lock()
 			if client, ok := h.clients[clientID]; ok {
 				delete(h.clients, clientID)
-				close(client.send)
+				client.Close()
 				h.mu.Unlock()
 				log.Printf("client unregistered: id=%s", clientID)
 			} else {
@@ -74,38 +81,59 @@ func (h *Hub) Run() {
 			}
 
 		case msg := <-h.broadcast:
+			// Create snapshot of clients to minimize lock time
 			h.mu.RLock()
-			matched := 0
+			clientSnapshot := make([]*Client, 0, len(h.clients))
 			for _, client := range h.clients {
-				if client.Matches(msg.event, msg.payload) {
+				clientSnapshot = append(clientSnapshot, client)
+			}
+			totalClients := len(h.clients)
+			h.mu.RUnlock()
+
+			// Broadcast to clients without holding lock
+			matched := 0
+			dropped := 0
+			for _, client := range clientSnapshot {
+				if matches(client.subscription, msg.event, msg.payload) {
 					// Non-blocking send
 					select {
 					case client.send <- msg.event:
+						matched++
 					default:
+						dropped++
+						log.Printf("dropped event for client %s: buffer full", client.ID)
 					}
-					matched++
 				}
 			}
-			log.Printf("broadcast event: type=%s matched=%d/%d clients",
-				msg.event.Type, matched, len(h.clients))
-			h.mu.RUnlock()
+			log.Printf("broadcast event: type=%s matched=%d/%d clients, dropped=%d",
+				msg.event.Type, matched, totalClients, dropped)
 		}
 	}
 }
 
 // Broadcast sends an event to all matching clients.
 func (h *Hub) Broadcast(event Event, payload map[string]interface{}) {
-	h.broadcast <- broadcastMsg{event: event, payload: payload}
+	select {
+	case h.broadcast <- broadcastMsg{event: event, payload: payload}:
+	default:
+		// Hub is at capacity or shutting down, drop the message
+		log.Printf("dropping broadcast: hub at capacity or shutting down")
+	}
 }
 
-// Cancel stops the hub.
-func (h *Hub) Cancel() {
-	h.cancel()
+// Stop signals the hub to stop.
+func (h *Hub) Stop() {
+	select {
+	case <-h.stop:
+		// Already stopped
+	default:
+		close(h.stop)
+	}
 }
 
-// Context returns the hub's context.
-func (h *Hub) Context() context.Context {
-	return h.ctx
+// Wait blocks until the hub has stopped.
+func (h *Hub) Wait() {
+	<-h.stopped
 }
 
 // Register registers a new client.
@@ -116,4 +144,15 @@ func (h *Hub) Register(client *Client) {
 // Unregister unregisters a client by ID.
 func (h *Hub) Unregister(clientID string) {
 	h.unregister <- clientID
+}
+
+// cleanup closes all client connections during shutdown.
+func (h *Hub) cleanup() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, client := range h.clients {
+		client.Close()
+	}
+	h.clients = nil
 }

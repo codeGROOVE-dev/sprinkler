@@ -1,3 +1,5 @@
+// Package webhook provides HTTP handlers for processing GitHub webhook events,
+// including signature validation and event extraction for broadcasting to subscribers.
 package webhook
 
 import (
@@ -11,22 +13,44 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ready-to-review/github-event-socket/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
 )
 
 const maxPayloadSize = 1 << 20 // 1MB
 
 // Handler handles GitHub webhook events.
 type Handler struct {
-	hub    *hub.Hub
-	secret string
+	ipValidator      IPValidator
+	hub              *hub.Hub
+	allowedEventsMap map[string]bool
+	secret           string
+	allowedEvents    []string
+}
+
+// IPValidator interface for IP validation.
+type IPValidator interface {
+	IsValid(ip string) bool
 }
 
 // NewHandler creates a new webhook handler.
-func NewHandler(h *hub.Hub, secret string) *Handler {
+func NewHandler(h *hub.Hub, secret string, allowedEvents []string, ipValidator IPValidator) *Handler {
+	// Build map for O(1) event type lookups
+	var allowedMap map[string]bool
+	if allowedEvents != nil {
+		allowedMap = make(map[string]bool, len(allowedEvents))
+		for _, event := range allowedEvents {
+			allowedMap[event] = true
+		}
+	}
+
 	return &Handler{
-		hub:    h,
-		secret: secret,
+		hub:              h,
+		secret:           secret,
+		allowedEvents:    allowedEvents,
+		allowedEventsMap: allowedMap,
+		ipValidator:      ipValidator,
 	}
 }
 
@@ -37,28 +61,53 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventType := r.Header.Get("X-GitHub-Event")
+	// Validate source IP if validator is configured
+	if h.ipValidator != nil {
+		// Use secure IP extraction from security package
+		clientIP := security.ClientIP(r)
+		if !h.ipValidator.IsValid(clientIP) {
+			logger.Warn("webhook rejected from non-GitHub IP", logger.Fields{"ip": clientIP})
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
+	eventType := r.Header.Get("X-GitHub-Event") //nolint:canonicalheader // GitHub webhook header
 	signature := r.Header.Get("X-Hub-Signature-256")
-	deliveryID := r.Header.Get("X-GitHub-Delivery")
-	
+	deliveryID := r.Header.Get("X-GitHub-Delivery") //nolint:canonicalheader // GitHub webhook header
+
+	// Check if event type is allowed
+	if h.allowedEventsMap != nil && !h.allowedEventsMap[eventType] {
+		logger.Warn("webhook event type not allowed", logger.Fields{
+			"event_type":  eventType,
+			"delivery_id": deliveryID,
+		})
+		w.WriteHeader(http.StatusOK) // Still return 200 to GitHub
+		return
+	}
 
 	// Check content length before reading
 	if r.ContentLength > maxPayloadSize {
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	
+
 	// Read body
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
+		logger.Error("error reading webhook body", err, logger.Fields{"delivery_id": deliveryID})
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() {
+		if err := r.Body.Close(); err != nil {
+			log.Printf("failed to close request body: %v", err)
+		}
+	}()
 
 	// Verify signature
 	if !VerifySignature(body, signature, h.secret) {
-				log.Printf("webhook signature verification failed for delivery: %s", deliveryID)
+		logger.Warn("webhook signature verification failed", logger.Fields{"delivery_id": deliveryID})
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -66,10 +115,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse payload
 	var payload map[string]interface{}
 	if err := json.Unmarshal(body, &payload); err != nil {
+		logger.Error("error parsing webhook payload", err, logger.Fields{"delivery_id": deliveryID})
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-
 
 	// Extract PR URL
 	prURL := ExtractPRURL(eventType, payload)
@@ -89,14 +138,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.hub.Broadcast(event, payload)
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-	log.Printf("processed webhook: event=%s delivery=%s", eventType, deliveryID)
+	if _, err := w.Write([]byte("OK")); err != nil {
+		logger.Error("failed to write response", err, logger.Fields{"delivery_id": deliveryID})
+	}
+	logger.Info("processed webhook", logger.Fields{
+		"event_type":  eventType,
+		"delivery_id": deliveryID,
+		"pr_url":      prURL,
+	})
 }
 
 // VerifySignature validates the GitHub webhook signature.
 func VerifySignature(payload []byte, signature, secret string) bool {
+	// Secret is required for security - no bypass allowed
 	if secret == "" {
-		return true // Skip verification if no secret configured
+		return false
 	}
 
 	if !strings.HasPrefix(signature, "sha256=") {

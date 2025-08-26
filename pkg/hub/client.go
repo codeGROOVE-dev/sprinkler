@@ -1,7 +1,9 @@
 package hub
 
 import (
-	"fmt"
+	"context"
+	"log"
+	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -9,78 +11,83 @@ import (
 
 // Client represents a connected WebSocket client with their subscription preferences.
 type Client struct {
-	id           string          // Unique client identifier
-	subscription Subscription    // What events this client wants
-	conn         *websocket.Conn // WebSocket connection
-	send         chan Event      // Buffered channel of events to send
-	hub          *Hub            // Reference to hub for unregistering
+	conn         *websocket.Conn
+	send         chan Event
+	hub          *Hub
+	done         chan struct{}
+	subscription Subscription
+	ID           string
+	closeOnce    sync.Once
 }
 
 // NewClient creates a new client.
 func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub) *Client {
 	return &Client{
-		id:           id,
+		ID:           id,
 		subscription: sub,
 		conn:         conn,
-		send:         make(chan Event, 10),
+		send:         make(chan Event, 100), // Increased buffer to reduce dropped messages
 		hub:          hub,
+		done:         make(chan struct{}),
 	}
 }
 
-// ID returns the client's ID.
-func (c *Client) ID() string {
-	return c.id
-}
-
-// Send returns the client's send channel.
-func (c *Client) Send() chan Event {
-	return c.send
-}
-
-// Conn returns the client's websocket connection.
-func (c *Client) Conn() *websocket.Conn {
-	return c.conn
-}
-
 // Run handles sending events to the client and periodic pings.
-func (c *Client) Run(pingInterval, writeTimeout time.Duration) {
+// Context should be passed from the caller for proper lifecycle management.
+func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Duration) {
 	ticker := time.NewTicker(pingInterval)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			log.Printf("failed to close websocket connection: %v", err)
+		}
+		c.Close()
 	}()
 
 	for {
 		select {
 		case event, ok := <-c.send:
 			if !ok {
+				log.Printf("client %s: send channel closed", c.ID)
 				return
 			}
 
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+				log.Printf("error setting write deadline for client %s: %v", c.ID, err)
+				return
+			}
 			if err := websocket.JSON.Send(c.conn, event); err != nil {
+				log.Printf("error sending event to client %s: %v", c.ID, err)
 				return
 			}
 
 		case <-ticker.C:
-			// Send ping frame
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := websocket.Message.Send(c.conn, ""); err != nil {
+			// Send ping as empty JSON object
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+				log.Printf("error setting ping deadline for client %s: %v", c.ID, err)
+				return
+			}
+			ping := map[string]string{"type": "ping"}
+			if err := websocket.JSON.Send(c.conn, ping); err != nil {
+				log.Printf("error sending ping to client %s: %v", c.ID, err)
 				return
 			}
 
-		case <-c.hub.ctx.Done():
+		case <-c.done:
+			log.Printf("client %s: done signal received", c.ID)
+			return
+
+		case <-ctx.Done():
+			log.Printf("client %s: context cancelled", c.ID)
 			return
 		}
 	}
 }
 
-// Matches determines if an event matches the client's subscription.
-func (c *Client) Matches(event Event, payload map[string]interface{}) bool {
-	return matches(c.subscription, event, payload)
-}
-
-// GenerateClientID generates a unique client ID.
-func GenerateClientID(randomString string) string {
-	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), randomString)
+// Close gracefully closes the client.
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+		close(c.send)
+	})
 }

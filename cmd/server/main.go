@@ -16,9 +16,9 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/websocket"
 
-	"github.com/ready-to-review/github-event-socket/pkg/hub"
-	"github.com/ready-to-review/github-event-socket/pkg/security"
-	"github.com/ready-to-review/github-event-socket/pkg/webhook"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/webhook"
 )
 
 const (
@@ -37,32 +37,81 @@ var (
 	maxConnsPerIP  = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
 	maxConnsTotal  = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
 	rateLimit      = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
+	validateGitHub = flag.Bool("validate-github-ips", true, "Only accept webhooks from GitHub IP ranges")
+	allowedEvents  = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"), "Comma-separated list of allowed webhook event types (use '*' for all)")
+	allowedOrigins = flag.String("allowed-origins", os.Getenv("ALLOWED_ORIGINS"), "Comma-separated list of allowed CORS origins (leave empty to disable CORS)")
 )
 
 func main() {
 	flag.Parse()
 
-	// Validate webhook secret is configured
+	// Validate webhook secret is configured (REQUIRED for security)
 	if *webhookSecret == "" {
-		log.Println("WARNING: No webhook secret configured. Webhook signatures will not be verified!")
-		log.Println("Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable for security.")
+		log.Fatal("ERROR: Webhook secret is required for security. Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable.")
 	}
 
+	// Validate allowed events is configured (REQUIRED)
+	if *allowedEvents == "" {
+		log.Fatal("ERROR: Allowed events must be specified. Set -allowed-events or ALLOWED_WEBHOOK_EVENTS environment variable. Use '*' to allow all events.")
+	}
+
+	// Parse allowed events
+	var allowedEventTypes []string
+	if *allowedEvents == "*" {
+		log.Println("Allowing all webhook event types")
+		allowedEventTypes = nil // nil means allow all
+	} else {
+		allowedEventTypes = strings.Split(*allowedEvents, ",")
+		for i := range allowedEventTypes {
+			allowedEventTypes[i] = strings.TrimSpace(allowedEventTypes[i])
+		}
+		log.Printf("Allowing webhook event types: %v", allowedEventTypes)
+	}
+
+	// Parse allowed origins for CORS
+	var corsOrigins []string
+	if *allowedOrigins != "" {
+		corsOrigins = strings.Split(*allowedOrigins, ",")
+		for i := range corsOrigins {
+			corsOrigins[i] = strings.TrimSpace(corsOrigins[i])
+		}
+		log.Printf("Allowing CORS origins: %v", corsOrigins)
+	} else {
+		log.Println("CORS disabled - no origins allowed")
+	}
+
+	// Create context for the application
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	h := hub.NewHub()
-	go h.Run()
+	go h.Run(ctx)
 
 	// Create security components
 	rateLimiter := security.NewRateLimiter(*rateLimit, time.Minute)
 	connLimiter := security.NewConnectionLimiter(*maxConnsPerIP, *maxConnsTotal)
-	
+
+	// Configure GitHub IP validation if enabled
+	var ipValidator webhook.IPValidator
+	if *validateGitHub {
+		validator, err := security.NewGitHubIPValidator(true)
+		if err != nil {
+			cancel()
+			log.Fatalf("failed to create GitHub IP validator: %v", err)
+		}
+		ipValidator = validator
+		log.Println("GitHub IP validation enabled for webhooks")
+	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/webhook", webhook.NewHandler(h, *webhookSecret))
-	wsHandler := hub.NewWebSocketHandler(h, connLimiter)
+	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes, ipValidator)
+	mux.Handle("/webhook", webhookHandler)
+
+	wsHandler := hub.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
 	mux.Handle("/ws", websocket.Handler(wsHandler.Handle))
 
-	// Apply combined middleware
-	handler := security.CombinedMiddleware(rateLimiter)(mux)
+	// Apply combined middleware with allowed origins
+	handler := security.CombinedMiddleware(rateLimiter, corsOrigins)(mux)
 
 	server := &http.Server{
 		Addr:           *addr,
@@ -81,66 +130,85 @@ func main() {
 		<-sigint
 
 		log.Println("shutting down server...")
-		
+
+		// Cancel the context to stop all components
+		cancel()
+
 		// Stop accepting new connections
-		h.Cancel()
-		
-		
+		h.Stop()
+
+		// Stop the rate limiter cleanup routine
+		rateLimiter.Stop()
+
+		// Stop the connection limiter cleanup routine
+		connLimiter.Stop()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("server shutdown error: %v", err)
 		}
+
+		// Wait for hub to finish
+		h.Wait()
+
 		close(done)
 	}()
 
 	var err error
-	
+
 	if *letsencrypt {
 		// Let's Encrypt automatic TLS
 		if *leDomains == "" {
 			log.Fatal("Let's Encrypt requires -le-domains to be specified")
 		}
-		
+
 		domains := strings.Split(*leDomains, ",")
 		for i := range domains {
 			domains[i] = strings.TrimSpace(domains[i])
 		}
-		
+
 		// Create cache directory if it doesn't exist
-		if err := os.MkdirAll(*leCacheDir, 0700); err != nil {
+		if err := os.MkdirAll(*leCacheDir, 0o700); err != nil {
 			log.Fatalf("failed to create Let's Encrypt cache directory: %v", err)
 		}
-		
+
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(domains...),
 			Cache:      autocert.DirCache(*leCacheDir),
 			Email:      *leEmail,
 		}
-		
+
 		// Update server with autocert configuration
 		server.Addr = ":443"
 		server.TLSConfig = &tls.Config{
 			GetCertificate: certManager.GetCertificate,
-			MinVersion:     tls.VersionTLS12,
+			MinVersion:     tls.VersionTLS13,
+			CipherSuites:   nil, // Let Go choose secure defaults for TLS 1.3
 		}
-		
-		// Start HTTP server for ACME challenges  
+
+		// Start HTTP server for ACME challenges
 		go func() {
 			h := certManager.HTTPHandler(nil)
+			acmeServer := &http.Server{
+				Addr:         ":80",
+				Handler:      h,
+				ReadTimeout:  30 * time.Second,
+				WriteTimeout: 30 * time.Second,
+				IdleTimeout:  120 * time.Second,
+			}
 			log.Println("starting HTTP server on :80 for Let's Encrypt ACME challenges")
 			log.Println("NOTE: Port 80 must be accessible from the internet for certificate issuance/renewal")
-			if err := http.ListenAndServe(":80", h); err != nil {
+			if err := acmeServer.ListenAndServe(); err != nil {
 				log.Printf("HTTP ACME server error: %v", err)
 				log.Printf("WARNING: Let's Encrypt certificate issuance/renewal may fail without port 80")
 			}
 		}()
-		
+
 		log.Printf("starting HTTPS server on :443 with Let's Encrypt for domains: %v", domains)
 		err = server.ListenAndServeTLS("", "")
-		
 	} else {
 		// Plain HTTP
 		log.Printf("WARNING: TLS not enabled. Use -tls-cert/-tls-key or -letsencrypt for production")

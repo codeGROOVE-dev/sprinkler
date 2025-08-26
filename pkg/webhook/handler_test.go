@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,18 +11,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ready-to-review/github-event-socket/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
 )
 
 func TestWebhookHandler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	h := hub.NewHub()
-	go h.Run()
+	go h.Run(ctx)
 
 	secret := "testsecret"
-	handler := NewHandler(h, secret)
+	handler := NewHandler(h, secret, nil, nil) // nil allows all events, nil disables IP validation
 
 	// Test invalid method
-	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+	req := httptest.NewRequest(http.MethodGet, "/webhook", http.NoBody)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -39,10 +43,13 @@ func TestWebhookHandler(t *testing.T) {
 		},
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
 	req = httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Event", "pull_request") //nolint:canonicalheader // GitHub webhook header
 
 	// Add valid signature
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -59,7 +66,7 @@ func TestWebhookHandler(t *testing.T) {
 	// Test invalid signature
 	req = httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Event", "pull_request") //nolint:canonicalheader // GitHub webhook header
 	req.Header.Set("X-Hub-Signature-256", "sha256=invalid")
 
 	w = httptest.NewRecorder()
