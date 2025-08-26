@@ -56,13 +56,15 @@ func getGitHubToken(flagToken string) (string, error) {
 
 func run() error {
 	var (
-		serverAddr = flag.String("addr", "localhost:8080", "server address")
-		org        = flag.String("org", "", "GitHub organization to subscribe to")
-		token      = flag.String("token", "", "GitHub personal access token")
-		myEvents   = flag.Bool("my-events", false, "Only receive events for authenticated user")
-		eventTypes = flag.String("events", "", "Comma-separated list of event types to subscribe to (use '*' for all)")
-		useTLS     = flag.Bool("tls", false, "Use TLS (wss://)")
-		verbose    = flag.Bool("verbose", false, "Show full event details")
+		serverAddr  = flag.String("addr", "localhost:8080", "server address")
+		org         = flag.String("org", "", "GitHub organization to subscribe to")
+		token       = flag.String("token", "", "GitHub personal access token")
+		myEvents    = flag.Bool("my-events", false, "Only receive events for authenticated user")
+		eventTypes  = flag.String("events", "", "Comma-separated list of event types to subscribe to (use '*' for all)")
+		useTLS      = flag.Bool("tls", false, "Use TLS (wss://)")
+		verbose     = flag.Bool("verbose", false, "Show full event details")
+		noReconnect = flag.Bool("no-reconnect", false, "Disable automatic reconnection")
+		maxRetries  = flag.Int("max-retries", 0, "Maximum reconnection attempts (0 = infinite)")
 	)
 	flag.Parse()
 
@@ -86,28 +88,8 @@ func run() error {
 		origin = "https://localhost/"
 	}
 	url := fmt.Sprintf("%s://%s/ws", scheme, *serverAddr)
-	log.Printf("connecting to %s", url)
 
-	config, err := websocket.NewConfig(url, origin)
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-
-	// Add Authorization header with Bearer token
-	config.Header = make(map[string][]string)
-	config.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", githubToken)}
-
-	ws, err := websocket.DialConfig(config)
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-	defer func() {
-		if err := ws.Close(); err != nil {
-			log.Printf("failed to close websocket: %v", err)
-		}
-	}()
-
-	// Send subscription
+	// Prepare subscription
 	sub := map[string]any{
 		"organization":   *org,
 		"my_events_only": *myEvents,
@@ -129,6 +111,77 @@ func run() error {
 		}
 	}
 
+	// Connection retry loop
+	retries := 0
+	for {
+		log.Printf("connecting to %s", url)
+
+		config, err := websocket.NewConfig(url, origin)
+		if err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+
+		// Add Authorization header with Bearer token
+		config.Header = make(map[string][]string)
+		config.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", githubToken)}
+
+		// Try to connect and handle events
+		err = connect(config, sub, *verbose)
+
+		select {
+		case <-interrupt:
+			log.Println("interrupt received, shutting down")
+			return nil
+		default:
+			// Connection failed or lost
+			if err != nil {
+				log.Printf("connection lost: %v", err)
+
+				// Check if reconnection is disabled
+				if *noReconnect {
+					return fmt.Errorf("connection failed and reconnection disabled: %w", err)
+				}
+
+				// Check retry limit
+				retries++
+				if *maxRetries > 0 && retries > *maxRetries {
+					return fmt.Errorf("exceeded maximum retry attempts (%d)", *maxRetries)
+				}
+
+				// Calculate backoff delay (exponential with jitter, max 30 seconds)
+				delay := time.Duration(retries) * time.Second
+				if delay > 30*time.Second {
+					delay = 30 * time.Second
+				}
+
+				log.Printf("reconnecting in %v (attempt %d)", delay, retries)
+
+				// Wait before reconnecting (or until interrupt)
+				select {
+				case <-time.After(delay):
+					continue
+				case <-interrupt:
+					log.Println("interrupt received during reconnect wait")
+					return nil
+				}
+			}
+		}
+	}
+}
+
+// connect establishes a WebSocket connection and handles events.
+func connect(config *websocket.Config, sub map[string]any, verbose bool) error {
+	ws, err := websocket.DialConfig(config)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer func() {
+		if err := ws.Close(); err != nil {
+			log.Printf("failed to close websocket: %v", err)
+		}
+	}()
+
+	// Send subscription
 	if err := websocket.JSON.Send(ws, sub); err != nil {
 		return fmt.Errorf("write subscription: %w", err)
 	}
@@ -136,65 +189,94 @@ func run() error {
 
 	done := make(chan struct{})
 
+	// Start a goroutine to send periodic pongs to keep connection alive
 	go func() {
-		defer close(done)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
 		for {
-			// Receive the full response structure
-			var response map[string]any
-			if err := websocket.JSON.Receive(ws, &response); err != nil {
-				log.Println("read:", err)
+			select {
+			case <-ticker.C:
+				// Send a pong message to keep the connection alive
+				pong := map[string]string{"type": "pong"}
+				if err := websocket.JSON.Send(ws, pong); err != nil {
+					log.Printf("error sending pong: %v", err)
+					return
+				}
+				if verbose {
+					log.Println("Sent pong to keep connection alive")
+				}
+			case <-done:
 				return
-			}
-
-			// Extract common fields if they exist
-			timestamp := ""
-			if ts, ok := response["timestamp"].(string); ok {
-				// Parse and format timestamp
-				if t, err := time.Parse(time.RFC3339, ts); err == nil {
-					timestamp = t.Format("15:04:05")
-				} else {
-					timestamp = ts
-				}
-			}
-
-			eventType := ""
-			if et, ok := response["type"].(string); ok {
-				eventType = et
-			}
-
-			url := ""
-			if u, ok := response["url"].(string); ok {
-				url = u
-			}
-
-			// Display based on verbosity
-			if *verbose {
-				// Pretty print the full JSON response
-				fmt.Printf("\n=== Event at %s ===\n", timestamp)
-				fmt.Printf("Type: %s\n", eventType)
-				fmt.Printf("URL: %s\n", url)
-				fmt.Println("Full response:")
-				prettyPrintJSON(response)
-				fmt.Println()
-			} else {
-				// Compact single-line format
-				if eventType != "" && url != "" {
-					fmt.Printf("[%s] %s: %s\n", timestamp, eventType, url)
-				} else {
-					// Fallback to showing whatever we received
-					fmt.Printf("[%s] Event received: %v\n", timestamp, response)
-				}
 			}
 		}
 	}()
 
+	// Read events
 	for {
-		select {
-		case <-done:
-			return nil
-		case <-interrupt:
-			log.Println("interrupt")
-			return nil
+		// Receive the full response structure
+		var response map[string]any
+		if err := websocket.JSON.Receive(ws, &response); err != nil {
+			return fmt.Errorf("read: %w", err)
+		}
+
+		// Check if this is a ping message
+		if msgType, ok := response["type"].(string); ok && msgType == "ping" {
+			// Handle ping - send pong back immediately
+			pong := map[string]string{"type": "pong"}
+			if err := websocket.JSON.Send(ws, pong); err != nil {
+				return fmt.Errorf("error sending pong response: %w", err)
+			}
+			if verbose {
+				log.Println("Received ping, sent pong")
+			}
+			continue // Don't display ping messages as events
+		}
+
+		// Extract common fields if they exist
+		timestamp := ""
+		if ts, ok := response["timestamp"].(string); ok {
+			// Parse and format timestamp
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				timestamp = t.Format("15:04:05")
+			} else {
+				timestamp = ts
+			}
+		}
+
+		eventType := ""
+		if et, ok := response["type"].(string); ok {
+			eventType = et
+		}
+
+		url := ""
+		if u, ok := response["url"].(string); ok {
+			url = u
+		}
+
+		// Display based on verbosity
+		if verbose {
+			// Pretty print the full JSON response
+			fmt.Printf("\n=== Event at %s ===\n", timestamp)
+			fmt.Printf("Type: %s\n", eventType)
+			fmt.Printf("URL: %s\n", url)
+			fmt.Println("Full response:")
+			prettyPrintJSON(response)
+			fmt.Println()
+		} else {
+			// Compact single-line format
+			switch {
+			case eventType != "" && url != "":
+				fmt.Printf("[%s] %s: %s\n", timestamp, eventType, url)
+			case eventType == "pong":
+				// Don't display pong responses unless verbose
+				if verbose {
+					fmt.Printf("[%s] Received pong acknowledgment\n", timestamp)
+				}
+			default:
+				// Fallback to showing whatever we received
+				fmt.Printf("[%s] Event received: %v\n", timestamp, response)
+			}
 		}
 	}
 }
