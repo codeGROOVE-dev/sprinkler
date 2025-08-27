@@ -11,8 +11,6 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/sprinkler)](https://go.dev/)
 [![Release](https://img.shields.io/github/v/release/codeGROOVE-dev/sprinkler?include_prereleases)](https://github.com/codeGROOVE-dev/sprinkler/releases)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/codeGROOVE-dev/sprinkler/ci.yml?branch=main)](https://github.com/codeGROOVE-dev/sprinkler/actions)
-[![codecov](https://codecov.io/gh/codeGROOVE-dev/sprinkler/branch/main/graph/badge.svg)](https://codecov.io/gh/codeGROOVE-dev/sprinkler)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/codeGROOVE-dev/sprinkler/pulls)
 
 </div>
@@ -27,8 +25,9 @@ go run ./cmd/server
 go run ./cmd/client
 ```
 
-## Client example
+## Client examples
 
+### Subscribe to organization events
 ```javascript
 const ws = new WebSocket('wss://your-server/ws', {
   headers: { 'Authorization': 'Bearer ghp_your_github_token' }
@@ -46,6 +45,45 @@ ws.on('message', (data) => {
   const event = JSON.parse(data);
   console.log(`${event.type}: ${event.url}`);
 });
+```
+
+### Subscribe to your events across all organizations
+```javascript
+ws.on('open', () => {
+  ws.send(JSON.stringify({
+    my_events_only: true  // No organization required
+  }));
+});
+```
+
+### Subscribe to specific PRs
+```javascript
+ws.on('open', () => {
+  ws.send(JSON.stringify({
+    pull_requests: [
+      "https://github.com/your-org/repo/pull/123",
+      "https://github.com/your-org/repo/pull/456"
+    ]
+    // organization is optional - will receive PR events if you're a member
+  }));
+});
+```
+
+**Note**: You can subscribe to up to 200 PRs per connection, and you must be a member of the organization that owns the PRs.
+
+### Command-line client examples
+```bash
+# Subscribe to organization events
+go run ./cmd/client -org your-org
+
+# Subscribe to specific PRs (no org required)
+go run ./cmd/client -prs "https://github.com/your-org/repo/pull/123,https://github.com/your-org/repo/pull/456"
+
+# Subscribe to your events across all organizations
+go run ./cmd/client --user
+
+# Combine filters
+go run ./cmd/client -org your-org -my-events  # Your events in a specific org
 ```
 
 ## Configuration

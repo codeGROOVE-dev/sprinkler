@@ -53,6 +53,7 @@ type Config struct {
 	Token        string
 	Organization string
 	EventTypes   []string
+	PullRequests []string // List of PR URLs to subscribe to
 	MaxBackoff   time.Duration
 	PingInterval time.Duration
 	MaxRetries   int
@@ -279,6 +280,12 @@ func (c *Client) connect(ctx context.Context) error {
 			sub["event_types"] = c.config.EventTypes
 			log.Printf("Subscribing to event types: %v", c.config.EventTypes)
 		}
+	}
+
+	// Add PR URLs if specified
+	if len(c.config.PullRequests) > 0 {
+		sub["pull_requests"] = c.config.PullRequests
+		log.Printf("Subscribing to %d specific PRs", len(c.config.PullRequests))
 	}
 
 	// Send subscription

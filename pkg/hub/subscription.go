@@ -2,13 +2,15 @@ package hub
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
 const (
-	maxOrgNameLength   = 39 // GitHub org name max length
-	maxEventTypeCount  = 50 // Reasonable limit for number of event types
-	maxEventTypeLength = 50 // Max length of individual event type
+	maxOrgNameLength      = 39  // GitHub org name max length
+	maxEventTypeCount     = 50  // Reasonable limit for number of event types
+	maxEventTypeLength    = 50  // Max length of individual event type
+	maxPRsPerSubscription = 200 // Maximum number of PRs to subscribe to
 )
 
 var (
@@ -24,21 +26,22 @@ type Subscription struct {
 	Username     string   `json:"-"`
 	EventTypes   []string `json:"event_types,omitempty"`
 	MyEventsOnly bool     `json:"my_events_only,omitempty"`
+	PullRequests []string `json:"pull_requests,omitempty"` // List of PR URLs to subscribe to
 }
 
 // Validate performs security validation on subscription data.
 func (s *Subscription) Validate() error {
-	// Validate organization
-	if s.Organization == "" {
-		return errors.New("organization is required")
-	}
-	if len(s.Organization) > maxOrgNameLength {
-		return errors.New("invalid organization name")
-	}
-	// GitHub org names can only contain alphanumeric characters, hyphens, and underscores
-	for _, c := range s.Organization {
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-			return errors.New("invalid organization name format")
+	// Organization is optional when subscribing to specific PRs or my events only
+	// The server will validate that the user has access to the resources
+	if s.Organization != "" {
+		if len(s.Organization) > maxOrgNameLength {
+			return errors.New("invalid organization name")
+		}
+		// GitHub org names can only contain alphanumeric characters, hyphens, and underscores
+		for _, c := range s.Organization {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+				return errors.New("invalid organization name format")
+			}
 		}
 	}
 
@@ -58,16 +61,62 @@ func (s *Subscription) Validate() error {
 		}
 	}
 
+	// Validate PR URLs if specified
+	if len(s.PullRequests) > 0 {
+		if len(s.PullRequests) > maxPRsPerSubscription {
+			return errors.New("too many PR URLs specified (max 200)")
+		}
+
+		// Validate each PR URL
+		for _, prURL := range s.PullRequests {
+			if prURL == "" {
+				return errors.New("empty PR URL")
+			}
+
+			// Basic validation - should be a GitHub PR URL
+			// Format: https://github.com/owner/repo/pull/number
+			if !strings.HasPrefix(prURL, "https://github.com/") && !strings.HasPrefix(prURL, "http://github.com/") {
+				return errors.New("invalid PR URL format")
+			}
+
+			// Check if it contains /pull/
+			if !strings.Contains(prURL, "/pull/") {
+				return errors.New("URL must be a pull request URL")
+			}
+		}
+	}
+
 	return nil
 }
 
-// matches determines if an event matches a client's subscription.
-func matches(sub Subscription, event Event, payload map[string]any) bool {
-	// If no organization specified, match nothing
-	if sub.Organization == "" {
-		return false
+// parsePRUrl extracts owner, repo, and PR number from a GitHub PR URL.
+func parsePRUrl(prURL string) (owner, repo string, prNumber int, err error) {
+	// Remove protocol
+	url := strings.TrimPrefix(prURL, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	url = strings.TrimPrefix(url, "github.com/")
+
+	// Split by /
+	parts := strings.Split(url, "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return "", "", 0, errors.New("invalid PR URL format")
 	}
 
+	owner = parts[0]
+	repo = parts[1]
+
+	// Parse PR number
+	var num int
+	if _, err := fmt.Sscanf(parts[3], "%d", &num); err != nil {
+		return "", "", 0, errors.New("invalid PR number")
+	}
+
+	return owner, repo, num, nil
+}
+
+// matches determines if an event matches a client's subscription.
+// userOrgs contains the lowercase organization names the user is a member of.
+func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
 	// Check if event type matches subscription
 	if len(sub.EventTypes) > 0 {
 		eventTypeMatches := false
@@ -82,44 +131,96 @@ func matches(sub Subscription, event Event, payload map[string]any) bool {
 		}
 	}
 
-	// First check if the event is from the subscribed organization
-	orgMatches := false
+	// Extract the organization from the event
+	eventOrg := ""
 
 	// Check repository owner
 	if repo, ok := payload["repository"].(map[string]any); ok {
 		if owner, ok := repo["owner"].(map[string]any); ok {
 			if login, ok := owner["login"].(string); ok {
-				// Case-insensitive org name comparison
-				if strings.EqualFold(login, sub.Organization) {
-					orgMatches = true
-				}
+				eventOrg = login
 			}
 		}
 	}
 
 	// Also check organization field directly (some events include it)
-	if !orgMatches {
+	if eventOrg == "" {
 		if org, ok := payload["organization"].(map[string]any); ok {
 			if login, ok := org["login"].(string); ok {
-				if strings.EqualFold(login, sub.Organization) {
-					orgMatches = true
-				}
+				eventOrg = login
 			}
 		}
 	}
 
-	if !orgMatches {
+	// Check if this is a PR subscription (no org required)
+	if len(sub.PullRequests) > 0 {
+		// For PR subscriptions, check if this event is about one of the subscribed PRs
+		// and the user is a member of the organization
+
+		// Only check org membership if we have an eventOrg
+		if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
+			// User is not a member of this org, don't deliver the event
+			return false
+		}
+
+		// Extract PR information from the event
+		if pr, ok := payload["pull_request"].(map[string]any); ok {
+			// Get PR number
+			prNumber, ok := pr["number"].(float64)
+			if !ok {
+				return false
+			}
+
+			// Get repository info
+			repoName := ""
+			if repo, ok := payload["repository"].(map[string]any); ok {
+				if name, ok := repo["name"].(string); ok {
+					repoName = name
+				}
+			}
+
+			// Check if this PR matches any of the subscribed PRs
+			for _, prURL := range sub.PullRequests {
+				owner, repo, num, err := parsePRUrl(prURL)
+				if err != nil {
+					continue
+				}
+
+				// Check if this matches the event
+				if strings.EqualFold(owner, eventOrg) &&
+					strings.EqualFold(repo, repoName) &&
+					int(prNumber) == num {
+					return true
+				}
+			}
+		}
+
+		// Not a PR event or not one of the subscribed PRs
 		return false
 	}
 
-	// If MyEventsOnly is false, match all org events
-	if !sub.MyEventsOnly {
-		return true
+	// For MyEventsOnly mode (no org required if subscribing to user's events across all orgs)
+	if sub.MyEventsOnly {
+		// Check org constraints
+		if sub.Organization != "" && !strings.EqualFold(eventOrg, sub.Organization) {
+			return false
+		}
+		// Check user is member of the event's org
+		if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
+			return false
+		}
+		// Check if user is involved in the event
+		return matchesUser(sub.Username, payload)
 	}
 
-	// Otherwise, check if the authenticated user is involved
-	// Username is populated during authentication
-	return matchesUser(sub.Username, payload)
+	// For regular subscription mode with org specified
+	if sub.Organization != "" {
+		// Case-insensitive org name comparison
+		return strings.EqualFold(eventOrg, sub.Organization)
+	}
+
+	// No matching mode found
+	return false
 }
 
 // matchesUserInObject checks if username matches login in a user object.

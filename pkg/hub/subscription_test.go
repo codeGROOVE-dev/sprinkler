@@ -1,16 +1,18 @@
 package hub
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestMatches(t *testing.T) {
 	tests := []struct {
-		name    string
-		sub     Subscription
-		event   Event
-		payload map[string]any
-		want    bool
+		name     string
+		sub      Subscription
+		event    Event
+		payload  map[string]any
+		userOrgs map[string]bool
+		want     bool
 	}{
 		{
 			name:    "no organization matches nothing",
@@ -276,13 +278,229 @@ func TestMatches(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			name:  "my events only - user NOT member of event org",
+			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			event: Event{},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"sender": map[string]any{
+					"login": "alice",
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true}, // User is only member of myorg, not otherorg
+			want:     false,                          // Should not receive events from orgs they're not members of
+		},
+		{
+			name:  "my events only - user IS member of event org but filtered by subscription org",
+			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			event: Event{},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"sender": map[string]any{
+					"login": "alice",
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true, "otherorg": true}, // User is member of both
+			want:     false,                                            // Should NOT receive - event is from otherorg but subscription is for myorg
+		},
+		{
+			name:  "my events only - no org specified, receives from all member orgs",
+			sub:   Subscription{MyEventsOnly: true, Username: "alice"},
+			event: Event{},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"sender": map[string]any{
+					"login": "alice",
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true, "otherorg": true}, // User is member of both
+			want:     true,                                             // Should receive - no org filter, user is member of event's org
+		},
+		{
+			name: "PR subscription - matches subscribed PR",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/myorg/myrepo/pull/123",
+					"https://github.com/myorg/myrepo/pull/456",
+				},
+			},
+			event: Event{Type: "pull_request"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"name": "myrepo",
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"number": float64(123),
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true},
+			want:     true,
+		},
+		{
+			name: "PR subscription - does not match different PR",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/myorg/myrepo/pull/123",
+				},
+			},
+			event: Event{Type: "pull_request"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"name": "myrepo",
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"number": float64(789), // Different PR number
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true},
+			want:     false,
+		},
+		{
+			name: "PR subscription - user not member of org",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/otherorg/repo/pull/123",
+				},
+			},
+			event: Event{Type: "pull_request"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"name": "repo",
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"number": float64(123),
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true}, // User is NOT member of otherorg
+			want:     false,
+		},
+		{
+			name: "PR subscription - matches PR review event",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/myorg/myrepo/pull/42",
+				},
+			},
+			event: Event{Type: "pull_request_review"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"name": "myrepo",
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"number": float64(42),
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true},
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matches(tt.sub, tt.event, tt.payload)
+			// Set default userOrgs if not specified
+			if tt.userOrgs == nil {
+				tt.userOrgs = make(map[string]bool)
+				// Add the subscription org as a default for backward compatibility
+				if tt.sub.Organization != "" {
+					tt.userOrgs[strings.ToLower(tt.sub.Organization)] = true
+				}
+			}
+			got := matches(tt.sub, tt.event, tt.payload, tt.userOrgs)
 			if got != tt.want {
 				t.Errorf("matches() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePRUrl(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantOwner string
+		wantRepo  string
+		wantNum   int
+		wantErr   bool
+	}{
+		{
+			name:      "valid https URL",
+			url:       "https://github.com/myorg/myrepo/pull/123",
+			wantOwner: "myorg",
+			wantRepo:  "myrepo",
+			wantNum:   123,
+			wantErr:   false,
+		},
+		{
+			name:      "valid http URL",
+			url:       "http://github.com/myorg/myrepo/pull/456",
+			wantOwner: "myorg",
+			wantRepo:  "myrepo",
+			wantNum:   456,
+			wantErr:   false,
+		},
+		{
+			name:    "invalid - issues URL",
+			url:     "https://github.com/myorg/myrepo/issues/123",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - missing pull",
+			url:     "https://github.com/myorg/myrepo/123",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - not a number",
+			url:     "https://github.com/myorg/myrepo/pull/abc",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner, repo, num, err := parsePRUrl(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parsePRUrl() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if owner != tt.wantOwner {
+					t.Errorf("parsePRUrl() owner = %v, want %v", owner, tt.wantOwner)
+				}
+				if repo != tt.wantRepo {
+					t.Errorf("parsePRUrl() repo = %v, want %v", repo, tt.wantRepo)
+				}
+				if num != tt.wantNum {
+					t.Errorf("parsePRUrl() num = %v, want %v", num, tt.wantNum)
+				}
 			}
 		})
 	}
@@ -300,9 +518,9 @@ func TestValidateSubscription(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "missing organization",
+			name:    "missing organization is allowed",
 			sub:     Subscription{},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name:    "org name too long",
@@ -353,6 +571,45 @@ func TestValidateSubscription(t *testing.T) {
 			sub: Subscription{
 				Organization: "myorg",
 				EventTypes:   make([]string, 51),
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid PR URLs",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/myorg/repo/pull/123",
+					"https://github.com/myorg/repo/pull/456",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "too many PR URLs",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: make([]string, 201), // 201 URLs, over the limit
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid PR URL format",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/myorg/repo/issues/123", // issues, not pull
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty PR URL",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"",
+				},
 			},
 			wantErr: true,
 		},

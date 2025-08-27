@@ -19,6 +19,7 @@ func TestHub(t *testing.T) {
 		Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
 		nil, // No websocket connection for unit test
 		hub,
+		[]string{"myorg"}, // User's organizations
 	)
 
 	client2 := NewClient(
@@ -26,6 +27,7 @@ func TestHub(t *testing.T) {
 		Subscription{Organization: "myorg"},
 		nil, // No websocket connection for unit test
 		hub,
+		[]string{"myorg"}, // User's organizations
 	)
 
 	hub.register <- client1
