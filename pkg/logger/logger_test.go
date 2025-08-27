@@ -15,17 +15,17 @@ func TestLoggerFieldOrdering(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil) // Reset after test
-	
+
 	fields := Fields{
-		"zebra": "last",
-		"alpha": "first",
+		"zebra":  "last",
+		"alpha":  "first",
 		"middle": "center",
 	}
-	
+
 	Info("test message", fields)
-	
+
 	output := buf.String()
-	
+
 	// Fields should be in alphabetical order
 	if !strings.Contains(output, "alpha=first") {
 		t.Error("alpha field not found in output")
@@ -36,12 +36,12 @@ func TestLoggerFieldOrdering(t *testing.T) {
 	if !strings.Contains(output, "zebra=last") {
 		t.Error("zebra field not found in output")
 	}
-	
+
 	// Check ordering
 	alphaIdx := strings.Index(output, "alpha=")
 	middleIdx := strings.Index(output, "middle=")
 	zebraIdx := strings.Index(output, "zebra=")
-	
+
 	if alphaIdx > middleIdx || middleIdx > zebraIdx {
 		t.Error("Fields are not in alphabetical order")
 	}
@@ -52,10 +52,10 @@ func TestLoggerWithNilFields(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	// Should not panic with nil fields
 	Info("test message", nil)
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "test message") {
 		t.Error("Message not found in output")
@@ -67,9 +67,9 @@ func TestLoggerWithEmptyFields(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	Info("test message", Fields{})
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "test message") {
 		t.Error("Message not found in output")
@@ -85,10 +85,10 @@ func TestErrorLogger(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	err := errors.New("test error")
 	Error("something failed", err, Fields{"code": "500"})
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "ERROR: something failed") {
 		t.Error("ERROR prefix not found")
@@ -106,9 +106,9 @@ func TestWarnLogger(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	Warn("potential issue", Fields{"threshold": "80%"})
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "WARNING: potential issue") {
 		t.Error("WARNING prefix not found")
@@ -123,15 +123,15 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	fields := Fields{
-		"path": "/etc/passwd",
+		"path":  "/etc/passwd",
 		"query": "SELECT * FROM users",
-		"url": "https://example.com?foo=bar&baz=qux",
+		"url":   "https://example.com?foo=bar&baz=qux",
 	}
-	
+
 	Info("test", fields)
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "path=/etc/passwd") {
 		t.Error("path field not preserved correctly")
@@ -149,14 +149,14 @@ func TestFieldsWithNilValues(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	fields := Fields{
-		"nil_value": nil,
+		"nil_value":    nil,
 		"string_value": "test",
 	}
-	
+
 	Info("test", fields)
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "nil_value=<nil>") {
 		t.Error("nil value not handled correctly")
@@ -171,10 +171,10 @@ func TestWithFieldsFormatting(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	fields := Fields{"user": "alice"}
 	WithFields(fields, "User %s logged in at %d", "bob", 12345)
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "User bob logged in at 12345") {
 		t.Error("Format string not applied correctly")
@@ -189,14 +189,14 @@ func TestLargeNumberOfFields(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
-	
+
 	fields := make(Fields, 100)
 	for i := 0; i < 100; i++ {
 		fields[fmt.Sprintf("field%03d", i)] = i
 	}
-	
+
 	Info("test with many fields", fields)
-	
+
 	output := buf.String()
 	if !strings.Contains(output, "test with many fields") {
 		t.Error("Message not found")

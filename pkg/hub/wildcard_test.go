@@ -123,8 +123,8 @@ func TestWildcardOrganizationSubscription(t *testing.T) {
 		{
 			name: "wildcard with user_events_only",
 			subscription: Subscription{
-				Organization: "*",
-				Username:     "testuser",
+				Organization:   "*",
+				Username:       "testuser",
 				UserEventsOnly: true,
 			},
 			eventOrg: "myorg",
@@ -149,8 +149,8 @@ func TestWildcardOrganizationSubscription(t *testing.T) {
 		{
 			name: "wildcard with user_events_only - not user's event",
 			subscription: Subscription{
-				Organization: "*",
-				Username:     "testuser",
+				Organization:   "*",
+				Username:       "testuser",
 				UserEventsOnly: true,
 			},
 			eventOrg: "myorg",

@@ -40,20 +40,20 @@ type Event struct {
 
 // Config holds the configuration for the client.
 type Config struct {
-	OnConnect    func()
-	OnDisconnect func(error)
-	OnEvent      func(Event)
-	ServerURL    string
-	Token        string
-	Organization string
-	EventTypes   []string
-	PullRequests []string // List of PR URLs to subscribe to
-	MaxBackoff   time.Duration
-	PingInterval time.Duration
-	MaxRetries   int
+	OnConnect      func()
+	OnDisconnect   func(error)
+	OnEvent        func(Event)
+	ServerURL      string
+	Token          string
+	Organization   string
+	EventTypes     []string
+	PullRequests   []string // List of PR URLs to subscribe to
+	MaxBackoff     time.Duration
+	PingInterval   time.Duration
+	MaxRetries     int
 	UserEventsOnly bool
-	Verbose      bool
-	NoReconnect  bool
+	Verbose        bool
+	NoReconnect    bool
 }
 
 // Client represents a WebSocket client with automatic reconnection.
@@ -65,7 +65,6 @@ type Client struct {
 	eventCount int
 	retries    int
 	mu         sync.RWMutex
-	connected  bool
 }
 
 // New creates a new robust WebSocket client.
@@ -199,20 +198,6 @@ func (c *Client) Stop() {
 	<-c.stoppedCh
 }
 
-// IsConnected returns whether the client is currently connected.
-func (c *Client) IsConnected() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.connected
-}
-
-// EventCount returns the number of events received.
-func (c *Client) EventCount() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.eventCount
-}
-
 // connect establishes a WebSocket connection and handles events.
 func (c *Client) connect(ctx context.Context) error {
 	log.Print(">>> Establishing WebSocket connection...")
@@ -241,13 +226,11 @@ func (c *Client) connect(ctx context.Context) error {
 	// Store connection
 	c.mu.Lock()
 	c.ws = ws
-	c.connected = true
 	c.mu.Unlock()
 
 	defer func() {
 		log.Print(">>> Closing WebSocket connection...")
 		c.mu.Lock()
-		c.connected = false
 		c.ws = nil
 		c.mu.Unlock()
 		if err := ws.Close(); err != nil {
@@ -259,7 +242,7 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Build subscription
 	sub := map[string]any{
-		"organization":   c.config.Organization,
+		"organization":     c.config.Organization,
 		"user_events_only": c.config.UserEventsOnly,
 	}
 
@@ -451,61 +434,45 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 			continue
 		}
 
-		// Process the event
-		c.processEvent(response)
-	}
-}
-
-// processEvent processes a received event.
-func (c *Client) processEvent(response map[string]any) {
-	// Extract message type
-	responseType := ""
-	if t, ok := response[msgTypeField].(string); ok {
-		responseType = t
-	}
-
-	// Parse event
-	event := Event{
-		Type: responseType,
-		Raw:  response,
-	}
-
-	// Extract URL
-	if url, ok := response["url"].(string); ok {
-		event.URL = url
-	}
-
-	// Extract timestamp
-	if ts, ok := response["timestamp"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			event.Timestamp = t
+		// Process the event inline
+		event := Event{
+			Type: responseType,
+			Raw:  response,
 		}
-	}
 
-	// Increment event counter
-	c.mu.Lock()
-	c.eventCount++
-	eventNum := c.eventCount
-	c.mu.Unlock()
+		if url, ok := response["url"].(string); ok {
+			event.URL = url
+		}
 
-	// Log event
-	if c.config.Verbose {
-		log.Printf("=== Event #%d at %s ===", eventNum, event.Timestamp.Format("15:04:05"))
-		log.Printf("Type: %s", event.Type)
-		log.Printf("URL: %s", event.URL)
-		log.Printf("Raw: %+v", event.Raw)
-	} else {
-		if event.Type != "" && event.URL != "" {
-			log.Printf("[%s] Event #%d: %s: %s",
-				event.Timestamp.Format("15:04:05"), eventNum, event.Type, event.URL)
+		if ts, ok := response["timestamp"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				event.Timestamp = t
+			}
+		}
+
+		c.mu.Lock()
+		c.eventCount++
+		eventNum := c.eventCount
+		c.mu.Unlock()
+
+		// Log event
+		if c.config.Verbose {
+			log.Printf("=== Event #%d at %s ===", eventNum, event.Timestamp.Format("15:04:05"))
+			log.Printf("Type: %s", event.Type)
+			log.Printf("URL: %s", event.URL)
+			log.Printf("Raw: %+v", event.Raw)
 		} else {
-			log.Printf("[%s] Event #%d received: %v",
-				event.Timestamp.Format("15:04:05"), eventNum, response)
+			if event.Type != "" && event.URL != "" {
+				log.Printf("[%s] Event #%d: %s: %s",
+					event.Timestamp.Format("15:04:05"), eventNum, event.Type, event.URL)
+			} else {
+				log.Printf("[%s] Event #%d received: %v",
+					event.Timestamp.Format("15:04:05"), eventNum, response)
+			}
 		}
-	}
 
-	// Notify callback
-	if c.config.OnEvent != nil {
-		c.config.OnEvent(event)
+		if c.config.OnEvent != nil {
+			c.config.OnEvent(event)
+		}
 	}
 }

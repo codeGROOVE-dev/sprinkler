@@ -110,9 +110,9 @@ func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subs
 	if h.testMode {
 		// In test mode, accept a test subscription that includes username
 		type testSubscription struct {
-			Organization string   `json:"organization"`
-			Username     string   `json:"username,omitempty"`
-			EventTypes   []string `json:"event_types,omitempty"`
+			Organization   string   `json:"organization"`
+			Username       string   `json:"username,omitempty"`
+			EventTypes     []string `json:"event_types,omitempty"`
 			UserEventsOnly bool     `json:"user_events_only,omitempty"`
 		}
 		var testSub testSubscription
@@ -386,10 +386,10 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	)
 
 	logger.Info("WebSocket connection established", logger.Fields{
-		"ip":             ip,
-		"org":            sub.Organization,
-		"user":           sub.Username,
-		"event_types":    sub.EventTypes,
+		"ip":               ip,
+		"org":              sub.Organization,
+		"user":             sub.Username,
+		"event_types":      sub.EventTypes,
 		"user_events_only": sub.UserEventsOnly,
 	})
 
