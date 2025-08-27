@@ -37,7 +37,7 @@ type broadcastMsg struct {
 }
 
 const (
-	// Channel buffer sizes
+	// Channel buffer sizes.
 	registerBufferSize   = 100
 	unregisterBufferSize = 100
 	broadcastBufferSize  = 1000
