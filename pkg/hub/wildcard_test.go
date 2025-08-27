@@ -121,11 +121,11 @@ func TestWildcardOrganizationSubscription(t *testing.T) {
 			shouldMatch: true,
 		},
 		{
-			name: "wildcard with my_events_only",
+			name: "wildcard with user_events_only",
 			subscription: Subscription{
 				Organization: "*",
 				Username:     "testuser",
-				MyEventsOnly: true,
+				UserEventsOnly: true,
 			},
 			eventOrg: "myorg",
 			userOrgs: map[string]bool{
@@ -147,11 +147,11 @@ func TestWildcardOrganizationSubscription(t *testing.T) {
 			shouldMatch: true,
 		},
 		{
-			name: "wildcard with my_events_only - not user's event",
+			name: "wildcard with user_events_only - not user's event",
 			subscription: Subscription{
 				Organization: "*",
 				Username:     "testuser",
-				MyEventsOnly: true,
+				UserEventsOnly: true,
 			},
 			eventOrg: "myorg",
 			userOrgs: map[string]bool{

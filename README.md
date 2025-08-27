@@ -37,7 +37,7 @@ ws.on('open', () => {
   ws.send(JSON.stringify({
     organization: "your-org",
     event_types: ["pull_request"],
-    my_events_only: false
+    user_events_only: false
   }));
 });
 
@@ -51,7 +51,7 @@ ws.on('message', (data) => {
 ```javascript
 ws.on('open', () => {
   ws.send(JSON.stringify({
-    my_events_only: true  // No organization required
+    user_events_only: true  // No organization required
   }));
 });
 ```
@@ -83,7 +83,7 @@ go run ./cmd/client -prs "https://github.com/your-org/repo/pull/123,https://gith
 go run ./cmd/client --user
 
 # Combine filters
-go run ./cmd/client -org your-org -my-events  # Your events in a specific org
+go run ./cmd/client -org your-org -user  # Your events in a specific org
 ```
 
 ## Configuration

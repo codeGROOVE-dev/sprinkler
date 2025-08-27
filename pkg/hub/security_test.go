@@ -327,7 +327,7 @@ func TestMatchesSecurityEdgeCases(t *testing.T) {
 		{
 			name: "mention with malicious username pattern",
 			sub: Subscription{
-				MyEventsOnly: true,
+				UserEventsOnly: true,
 				Username:     "user",
 			},
 			event: Event{Type: "issue_comment"},

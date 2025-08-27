@@ -60,8 +60,7 @@ func run() error {
 		serverAddr  = flag.String("addr", "localhost:8080", "server address")
 		org         = flag.String("org", "", "GitHub organization to subscribe to (use '*' for all your orgs)")
 		token       = flag.String("token", "", "GitHub personal access token")
-		myEvents    = flag.Bool("my-events", false, "Only receive events for authenticated user")
-		userMode    = flag.Bool("user", false, "Subscribe to your events across all organizations")
+		userEvents  = flag.Bool("user", false, "Subscribe to your events across all organizations")
 		eventTypes  = flag.String("events", "", "Comma-separated list of event types to subscribe to (use '*' for all)")
 		prs         = flag.String("prs", "", "Comma-separated list of PR URLs to subscribe to (max 200)")
 		useTLS      = flag.Bool("tls", false, "Use TLS (wss://)")
@@ -84,15 +83,19 @@ func run() error {
 	}
 
 	// Handle --user mode
-	if *userMode {
-		*myEvents = true
-		// When in user mode, we don't need an org
+	if *userEvents {
 		log.Println("User mode enabled: subscribing to your events across all organizations")
 	}
 
+	// If no org is specified and not using PR-only mode, default to '*' (all orgs)
+	if *org == "" && len(prList) == 0 {
+		*org = "*"
+		log.Println("No organization specified, subscribing to all your organizations")
+	}
+
 	// Validate that we have at least one subscription type
-	if *org == "" && len(prList) == 0 && !*myEvents {
-		return errors.New("organization, PR URLs, --user, or -my-events flag required")
+	if *org == "" && len(prList) == 0 {
+		return errors.New("organization, PR URLs, or --user flag required")
 	}
 
 	// Get token from various sources
@@ -129,7 +132,7 @@ func run() error {
 		Token:        githubToken,
 		EventTypes:   eventTypesList,
 		PullRequests: prList,
-		MyEventsOnly: *myEvents,
+		UserEventsOnly: *userEvents,
 		Verbose:      *verbose,
 		NoReconnect:  *noReconnect,
 		MaxRetries:   *maxRetries,

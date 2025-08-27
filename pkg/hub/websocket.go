@@ -113,7 +113,7 @@ func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subs
 			Organization string   `json:"organization"`
 			Username     string   `json:"username,omitempty"`
 			EventTypes   []string `json:"event_types,omitempty"`
-			MyEventsOnly bool     `json:"my_events_only,omitempty"`
+			UserEventsOnly bool     `json:"user_events_only,omitempty"`
 		}
 		var testSub testSubscription
 		if err := websocket.JSON.Receive(ws, &testSub); err != nil {
@@ -122,7 +122,7 @@ func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subs
 		}
 		sub.Organization = testSub.Organization
 		sub.EventTypes = testSub.EventTypes
-		sub.MyEventsOnly = testSub.MyEventsOnly
+		sub.UserEventsOnly = testSub.UserEventsOnly
 		sub.Username = testSub.Username // Preserve username for testing
 		log.Printf("TEST MODE: Received subscription with Username=%q, Organization=%q", sub.Username, sub.Organization)
 	} else {
@@ -333,7 +333,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
-	// Organization is optional for PR subscriptions and MyEventsOnly mode
+	// Organization is optional for PR subscriptions and UserEventsOnly mode
 
 	// Validate subscription data
 	if err := sub.Validate(); err != nil {
@@ -390,7 +390,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		"org":            sub.Organization,
 		"user":           sub.Username,
 		"event_types":    sub.EventTypes,
-		"my_events_only": sub.MyEventsOnly,
+		"user_events_only": sub.UserEventsOnly,
 	})
 
 	// Send success response to client immediately after successful subscription
