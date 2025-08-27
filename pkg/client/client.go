@@ -51,7 +51,7 @@ type Config struct {
 	MaxBackoff   time.Duration
 	PingInterval time.Duration
 	MaxRetries   int
-	MyEventsOnly bool
+	UserEventsOnly bool
 	Verbose      bool
 	NoReconnect  bool
 }
@@ -74,8 +74,8 @@ func New(config Config) (*Client, error) {
 	if config.ServerURL == "" {
 		return nil, errors.New("serverURL is required")
 	}
-	if config.Organization == "" && len(config.PullRequests) == 0 && !config.MyEventsOnly {
-		return nil, errors.New("organization, pull requests, or my-events-only required")
+	if config.Organization == "" && len(config.PullRequests) == 0 {
+		return nil, errors.New("organization or pull requests required")
 	}
 	if config.Token == "" {
 		return nil, errors.New("token is required")
@@ -260,7 +260,7 @@ func (c *Client) connect(ctx context.Context) error {
 	// Build subscription
 	sub := map[string]any{
 		"organization":   c.config.Organization,
-		"my_events_only": c.config.MyEventsOnly,
+		"user_events_only": c.config.UserEventsOnly,
 	}
 
 	// Add event types if specified

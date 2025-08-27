@@ -26,7 +26,7 @@ type Subscription struct {
 	Organization string   `json:"organization"`
 	Username     string   `json:"-"`
 	EventTypes   []string `json:"event_types,omitempty"`
-	MyEventsOnly bool     `json:"my_events_only,omitempty"`
+	UserEventsOnly bool     `json:"user_events_only,omitempty"`
 	PullRequests []string `json:"pull_requests,omitempty"` // List of PR URLs to subscribe to
 }
 
@@ -220,8 +220,8 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 		return false
 	}
 
-	// For MyEventsOnly mode (no org required if subscribing to user's events across all orgs)
-	if sub.MyEventsOnly {
+	// For UserEventsOnly mode (no org required if subscribing to user's events across all orgs)
+	if sub.UserEventsOnly {
 		// Check org constraints
 		if sub.Organization != "" {
 			if sub.Organization == "*" {

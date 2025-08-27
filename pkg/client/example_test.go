@@ -16,7 +16,7 @@ func ExampleClient() {
 		Organization: "myorg",
 		Token:        "ghp_yourtoken",
 		EventTypes:   []string{"pull_request", "issue_comment"},
-		MyEventsOnly: true,
+		UserEventsOnly: true,
 		Verbose:      false,
 		MaxRetries:   5,
 		OnEvent: func(event client.Event) {

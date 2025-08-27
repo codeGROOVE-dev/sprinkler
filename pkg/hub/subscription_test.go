@@ -73,7 +73,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches PR author",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -91,7 +91,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - no match for different user",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -109,7 +109,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "all org events - matches any user",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: false},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: false},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -127,7 +127,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches assignee",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -148,7 +148,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches reviewer",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -169,7 +169,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches review author",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -187,7 +187,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches comment author",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -206,7 +206,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches mention",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -264,7 +264,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - matches sender",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -280,7 +280,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - user NOT member of event org",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -297,7 +297,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - user IS member of event org but filtered by subscription org",
-			sub:   Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -314,7 +314,7 @@ func TestMatches(t *testing.T) {
 		},
 		{
 			name:  "my events only - no org specified, receives from all member orgs",
-			sub:   Subscription{MyEventsOnly: true, Username: "alice"},
+			sub:   Subscription{UserEventsOnly: true, Username: "alice"},
 			event: Event{},
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -546,7 +546,7 @@ func TestValidateSubscription(t *testing.T) {
 			name: "all fields valid",
 			sub: Subscription{
 				Organization: "myorg",
-				MyEventsOnly: true,
+				UserEventsOnly: true,
 			},
 			wantErr: false,
 		},

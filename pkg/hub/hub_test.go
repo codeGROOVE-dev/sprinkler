@@ -16,7 +16,7 @@ func TestHub(t *testing.T) {
 	// Test registering clients - properly initialize using NewClient
 	client1 := NewClient(
 		"client1",
-		Subscription{Organization: "myorg", MyEventsOnly: true, Username: "alice"},
+		Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 		nil, // No websocket connection for unit test
 		hub,
 		[]string{"myorg"}, // User's organizations
