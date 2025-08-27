@@ -6,7 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ type Config struct {
 	UserEventsOnly bool
 	Verbose        bool
 	NoReconnect    bool
+	Logger         *slog.Logger // Optional logger, defaults to text handler on stderr
 }
 
 // Client represents a WebSocket client with automatic reconnection.
@@ -65,6 +67,7 @@ type Client struct {
 	eventCount int
 	retries    int
 	mu         sync.RWMutex
+	logger     *slog.Logger
 }
 
 // New creates a new robust WebSocket client.
@@ -88,10 +91,17 @@ func New(config Config) (*Client, error) {
 		config.MaxBackoff = 30 * time.Second
 	}
 
+	// Set default logger if not provided
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	}
+
 	return &Client{
 		config:    config,
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
+		logger:    logger,
 	}, nil
 }
 
@@ -102,23 +112,23 @@ func (c *Client) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Client context cancelled, shutting down")
+			c.logger.Info("Client context cancelled, shutting down")
 			return ctx.Err()
 		case <-c.stopCh:
-			log.Println("Client stop requested")
+			c.logger.Info("Client stop requested")
 			return nil
 		default:
 		}
 
 		// Connection attempt logging
 		if c.retries == 0 {
-			log.Print("========================================")
-			log.Printf("CONNECTING to WebSocket server at %s", c.config.ServerURL)
-			log.Print("========================================")
+			c.logger.Info("========================================")
+			c.logger.Info("CONNECTING to WebSocket server", "url", c.config.ServerURL)
+			c.logger.Info("========================================")
 		} else {
-			log.Print("========================================")
-			log.Printf("RECONNECTING to WebSocket server at %s (attempt #%d)", c.config.ServerURL, c.retries)
-			log.Print("========================================")
+			c.logger.Info("========================================")
+			c.logger.Info("RECONNECTING to WebSocket server", "url", c.config.ServerURL, "attempt", c.retries)
+			c.logger.Info("========================================")
 		}
 
 		// Try to connect
@@ -128,22 +138,19 @@ func (c *Client) Start(ctx context.Context) error {
 			// Check if it's an authentication error - don't retry these
 			var authErr *AuthenticationError
 			if errors.As(err, &authErr) {
-				log.Print(separatorLine)
-				log.Print("AUTHENTICATION FAILED!")
-				log.Printf("Error: %v", err)
-				log.Print("This is likely due to:")
-				log.Print("- Invalid GitHub token")
-				log.Print("- Not being a member of the requested organization")
-				log.Print("- Insufficient permissions")
-				log.Print(separatorLine)
+				c.logger.Error(separatorLine)
+				c.logger.Error("AUTHENTICATION FAILED!", "error", err)
+				c.logger.Error("This is likely due to:")
+				c.logger.Error("- Invalid GitHub token")
+				c.logger.Error("- Not being a member of the requested organization")
+				c.logger.Error("- Insufficient permissions")
+				c.logger.Error(separatorLine)
 				return err
 			}
 
-			log.Print(separatorLine)
-			log.Print("WARNING: WebSocket CONNECTION LOST!")
-			log.Printf("Error: %v", err)
-			log.Printf("Events received before disconnect: %d", c.eventCount)
-			log.Print(separatorLine)
+			c.logger.Warn(separatorLine)
+			c.logger.Warn("WebSocket CONNECTION LOST!", "error", err, "events_received", c.eventCount)
+			c.logger.Warn(separatorLine)
 
 			// Notify disconnect callback
 			if c.config.OnDisconnect != nil {
@@ -158,7 +165,7 @@ func (c *Client) Start(ctx context.Context) error {
 			// Check retry limit
 			c.retries++
 			if c.config.MaxRetries > 0 && c.retries > c.config.MaxRetries {
-				log.Printf("ERROR: Exceeded maximum retry attempts (%d). Giving up.", c.config.MaxRetries)
+				c.logger.Error("Exceeded maximum retry attempts. Giving up.", "max_retries", c.config.MaxRetries)
 				return fmt.Errorf("exceeded maximum retry attempts (%d)", c.config.MaxRetries)
 			}
 
@@ -168,13 +175,13 @@ func (c *Client) Start(ctx context.Context) error {
 				delay = c.config.MaxBackoff
 			}
 
-			log.Printf(">>> Will attempt to reconnect in %v seconds <<<", delay.Seconds())
-			log.Print(">>> Press Ctrl+C to exit <<<")
+			c.logger.Info("Will attempt to reconnect", "delay_seconds", delay.Seconds())
+			c.logger.Info("Press Ctrl+C to exit")
 
 			// Wait before reconnecting
 			select {
 			case <-time.After(delay):
-				log.Print(">>> Reconnection delay elapsed, attempting to reconnect...")
+				c.logger.Info("Reconnection delay elapsed, attempting to reconnect")
 				continue
 			case <-ctx.Done():
 				return ctx.Err()
@@ -191,7 +198,7 @@ func (c *Client) Stop() {
 	c.mu.Lock()
 	if c.ws != nil {
 		if closeErr := c.ws.Close(); closeErr != nil {
-			log.Printf("Error closing websocket on shutdown: %v", closeErr)
+			c.logger.Error("Error closing websocket on shutdown", "error", closeErr)
 		}
 	}
 	c.mu.Unlock()
@@ -200,7 +207,7 @@ func (c *Client) Stop() {
 
 // connect establishes a WebSocket connection and handles events.
 func (c *Client) connect(ctx context.Context) error {
-	log.Print(">>> Establishing WebSocket connection...")
+	c.logger.Info("Establishing WebSocket connection")
 
 	// Create WebSocket config with appropriate origin
 	origin := "http://localhost/"
@@ -221,7 +228,7 @@ func (c *Client) connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	log.Print("✓ WebSocket connection ESTABLISHED successfully!")
+	c.logger.Info("✓ WebSocket connection ESTABLISHED successfully!")
 
 	// Store connection
 	c.mu.Lock()
@@ -229,14 +236,14 @@ func (c *Client) connect(ctx context.Context) error {
 	c.mu.Unlock()
 
 	defer func() {
-		log.Print(">>> Closing WebSocket connection...")
+		c.logger.Debug("Closing WebSocket connection")
 		c.mu.Lock()
 		c.ws = nil
 		c.mu.Unlock()
 		if err := ws.Close(); err != nil {
-			log.Printf("ERROR: Failed to close websocket cleanly: %v", err)
+			c.logger.Error("Failed to close websocket cleanly", "error", err)
 		} else {
-			log.Print("✓ WebSocket connection closed cleanly")
+			c.logger.Info("✓ WebSocket connection closed cleanly")
 		}
 	}()
 
@@ -250,26 +257,26 @@ func (c *Client) connect(ctx context.Context) error {
 	if len(c.config.EventTypes) > 0 {
 		// Check for wildcard
 		if len(c.config.EventTypes) == 1 && c.config.EventTypes[0] == "*" {
-			log.Println("Subscribing to all event types")
+			c.logger.Info("Subscribing to all event types")
 			// Don't send event_types field - server interprets as all
 		} else {
 			sub["event_types"] = c.config.EventTypes
-			log.Printf("Subscribing to event types: %v", c.config.EventTypes)
+			c.logger.Info("Subscribing to event types", "types", c.config.EventTypes)
 		}
 	}
 
 	// Add PR URLs if specified
 	if len(c.config.PullRequests) > 0 {
 		sub["pull_requests"] = c.config.PullRequests
-		log.Printf("Subscribing to %d specific PRs", len(c.config.PullRequests))
+		c.logger.Info("Subscribing to specific PRs", "count", len(c.config.PullRequests))
 	}
 
 	// Send subscription
-	log.Print(">>> Sending subscription request...")
+	c.logger.Debug("Sending subscription request")
 	if err := websocket.JSON.Send(ws, sub); err != nil {
 		return fmt.Errorf("write subscription: %w", err)
 	}
-	log.Print(">>> Waiting for subscription confirmation...")
+	c.logger.Debug("Waiting for subscription confirmation")
 
 	// Set a read deadline for subscription confirmation to prevent indefinite hanging
 	if err := ws.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
@@ -303,11 +310,9 @@ func (c *Client) connect(ctx context.Context) error {
 		if msg, ok := firstResponse["message"].(string); ok {
 			message = msg
 		}
-		log.Print(separatorLine)
-		log.Print("SUBSCRIPTION REJECTED BY SERVER!")
-		log.Printf("Error: %s", errorCode)
-		log.Printf("Message: %s", message)
-		log.Print(separatorLine)
+		c.logger.Error(separatorLine)
+		c.logger.Error("SUBSCRIPTION REJECTED BY SERVER!", "error_code", errorCode, "message", message)
+		c.logger.Error(separatorLine)
 
 		// Return AuthenticationError for access denied errors to prevent retries
 		if errorCode == "access_denied" {
@@ -321,16 +326,16 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Handle subscription confirmation
 	if responseType == "subscription_confirmed" {
-		log.Print("✓ Subscription confirmed by server!")
+		c.logger.Info("✓ Subscription confirmed by server!")
 		if org, ok := firstResponse["organization"].(string); ok {
 			if org == "*" {
-				log.Print("  Organization: * (all your organizations)")
+				c.logger.Info("  Organization: * (all your organizations)")
 			} else {
-				log.Printf("  Organization: %s", org)
+				c.logger.Info("  Subscription details", "organization", org)
 			}
 		}
 		if username, ok := firstResponse["username"].(string); ok {
-			log.Printf("  Username: %s", username)
+			c.logger.Info("  Subscription details", "username", username)
 		}
 		if eventTypes, ok := firstResponse["event_types"].([]any); ok && len(eventTypes) > 0 {
 			types := make([]string, len(eventTypes))
@@ -339,14 +344,14 @@ func (c *Client) connect(ctx context.Context) error {
 					types[i] = s
 				}
 			}
-			log.Printf("  Event types: %v", types)
+			c.logger.Info("  Subscription details", "event_types", types)
 		}
 	} else {
 		// For backward compatibility, treat any non-error response as success
-		log.Printf("✓ Successfully subscribed (server response type: %s)", responseType)
+		c.logger.Info("✓ Successfully subscribed", "response_type", responseType)
 	}
 
-	log.Print(">>> Listening for events...")
+	c.logger.Info("Listening for events...")
 
 	// Notify connect callback
 	if c.config.OnConnect != nil {
@@ -379,13 +384,13 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 			return
 		case <-ticker.C:
 			pong := map[string]string{msgTypeField: "pong"}
-			log.Print("[KEEP-ALIVE] Sending periodic pong to maintain connection...")
+			c.logger.Debug("[KEEP-ALIVE] Sending periodic pong to maintain connection")
 			if err := websocket.JSON.Send(ws, pong); err != nil {
-				log.Printf("ERROR: Failed to send keep-alive pong: %v", err)
-				log.Print(">>> Connection may be broken!")
+				c.logger.Error("Failed to send keep-alive pong", "error", err)
+				c.logger.Warn("Connection may be broken!")
 				return
 			}
-			log.Print("[KEEP-ALIVE] ✓ Pong sent successfully")
+			c.logger.Debug("[KEEP-ALIVE] ✓ Pong sent successfully")
 		}
 	}
 }
@@ -402,11 +407,9 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		// Receive message
 		var response map[string]any
 		if err := websocket.JSON.Receive(ws, &response); err != nil {
-			log.Print(separatorLine)
-			log.Print("ERROR: Lost connection while reading!")
-			log.Printf("Read error: %v", err)
-			log.Printf("Events received before disconnect: %d", c.eventCount)
-			log.Print(separatorLine)
+			c.logger.Error(separatorLine)
+			c.logger.Error("Lost connection while reading!", "error", err, "events_received", c.eventCount)
+			c.logger.Error(separatorLine)
 			return fmt.Errorf("read: %w", err)
 		}
 
@@ -418,19 +421,19 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 
 		// Handle ping messages
 		if responseType == "ping" {
-			log.Print("[PING-PONG] ← Received PING from server")
+			c.logger.Debug("[PING-PONG] Received PING from server")
 			pong := map[string]string{msgTypeField: "pong"}
 			if err := websocket.JSON.Send(ws, pong); err != nil {
-				log.Printf("[PING-PONG] ✗ Failed to send PONG response: %v", err)
+				c.logger.Error("[PING-PONG] Failed to send PONG response", "error", err)
 				return fmt.Errorf("error sending pong response: %w", err)
 			}
-			log.Print("[PING-PONG] → Sent PONG response to server")
+			c.logger.Debug("[PING-PONG] Sent PONG response to server")
 			continue
 		}
 
 		// Handle pong acknowledgments
 		if responseType == "pong" {
-			log.Print("[PING-PONG] ← Received PONG acknowledgment from server")
+			c.logger.Debug("[PING-PONG] Received PONG acknowledgment from server")
 			continue
 		}
 
@@ -457,17 +460,24 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 
 		// Log event
 		if c.config.Verbose {
-			log.Printf("=== Event #%d at %s ===", eventNum, event.Timestamp.Format("15:04:05"))
-			log.Printf("Type: %s", event.Type)
-			log.Printf("URL: %s", event.URL)
-			log.Printf("Raw: %+v", event.Raw)
+			c.logger.Info("Event received",
+				"event_number", eventNum,
+				"timestamp", event.Timestamp.Format("15:04:05"),
+				"type", event.Type,
+				"url", event.URL,
+				"raw", event.Raw)
 		} else {
 			if event.Type != "" && event.URL != "" {
-				log.Printf("[%s] Event #%d: %s: %s",
-					event.Timestamp.Format("15:04:05"), eventNum, event.Type, event.URL)
+				c.logger.Info("Event received",
+					"timestamp", event.Timestamp.Format("15:04:05"),
+					"event_number", eventNum,
+					"type", event.Type,
+					"url", event.URL)
 			} else {
-				log.Printf("[%s] Event #%d received: %v",
-					event.Timestamp.Format("15:04:05"), eventNum, response)
+				c.logger.Info("Event received",
+					"timestamp", event.Timestamp.Format("15:04:05"),
+					"event_number", eventNum,
+					"response", response)
 			}
 		}
 

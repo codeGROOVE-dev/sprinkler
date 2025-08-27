@@ -3,7 +3,7 @@
 // The client handles:
 //   - Automatic reconnection with exponential backoff
 //   - Ping/pong keep-alive messages
-//   - Comprehensive logging of connection states
+//   - Structured logging with customizable output
 //   - Event callbacks for custom processing
 //   - Graceful shutdown
 //
@@ -27,4 +27,15 @@
 //	if err := c.Start(ctx); err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// To disable logging or customize output:
+//
+//	import "log/slog"
+//	import "io"
+//
+//	// Silence all logs
+//	config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+//
+//	// Or use JSON logging
+//	config.Logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 package client
