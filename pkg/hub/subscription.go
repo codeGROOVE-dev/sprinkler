@@ -34,6 +34,12 @@ func (s *Subscription) Validate() error {
 	// Organization is optional when subscribing to specific PRs or my events only
 	// The server will validate that the user has access to the resources
 	if s.Organization != "" {
+		// Allow wildcard to subscribe to all orgs
+		if s.Organization == "*" {
+			// Wildcard is valid - subscribes to all orgs the user is a member of
+			return nil
+		}
+
 		if len(s.Organization) > maxOrgNameLength {
 			return errors.New("invalid organization name")
 		}
@@ -202,12 +208,21 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 	// For MyEventsOnly mode (no org required if subscribing to user's events across all orgs)
 	if sub.MyEventsOnly {
 		// Check org constraints
-		if sub.Organization != "" && !strings.EqualFold(eventOrg, sub.Organization) {
-			return false
-		}
-		// Check user is member of the event's org
-		if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
-			return false
+		if sub.Organization != "" {
+			if sub.Organization == "*" {
+				// Wildcard - check if user is member of the event's org
+				if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
+					return false
+				}
+			} else if !strings.EqualFold(eventOrg, sub.Organization) {
+				// Specific org - must match
+				return false
+			}
+		} else {
+			// No org specified - check user is member of the event's org
+			if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
+				return false
+			}
 		}
 		// Check if user is involved in the event
 		return matchesUser(sub.Username, payload)
@@ -215,6 +230,11 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 
 	// For regular subscription mode with org specified
 	if sub.Organization != "" {
+		// Handle wildcard organization - matches any org the user is a member of
+		if sub.Organization == "*" {
+			// Check if the event org is one the user is a member of
+			return eventOrg != "" && userOrgs[strings.ToLower(eventOrg)]
+		}
 		// Case-insensitive org name comparison
 		return strings.EqualFold(eventOrg, sub.Organization)
 	}

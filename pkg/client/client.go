@@ -80,8 +80,8 @@ func New(config Config) (*Client, error) {
 	if config.ServerURL == "" {
 		return nil, errors.New("serverURL is required")
 	}
-	if config.Organization == "" {
-		return nil, errors.New("organization is required")
+	if config.Organization == "" && len(config.PullRequests) == 0 && !config.MyEventsOnly {
+		return nil, errors.New("organization, pull requests, or my-events-only required")
 	}
 	if config.Token == "" {
 		return nil, errors.New("token is required")
@@ -347,7 +347,11 @@ func (c *Client) connect(ctx context.Context) error {
 	if responseType == "subscription_confirmed" {
 		log.Print("✓ Subscription confirmed by server!")
 		if org, ok := firstResponse["organization"].(string); ok {
-			log.Printf("  Organization: %s", org)
+			if org == "*" {
+				log.Print("  Organization: * (all your organizations)")
+			} else {
+				log.Printf("  Organization: %s", org)
+			}
 		}
 		if username, ok := firstResponse["username"].(string); ok {
 			log.Printf("  Username: %s", username)

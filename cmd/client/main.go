@@ -58,7 +58,7 @@ func getGitHubToken(flagToken string) (string, error) {
 func run() error {
 	var (
 		serverAddr  = flag.String("addr", "localhost:8080", "server address")
-		org         = flag.String("org", "", "GitHub organization to subscribe to")
+		org         = flag.String("org", "", "GitHub organization to subscribe to (use '*' for all your orgs)")
 		token       = flag.String("token", "", "GitHub personal access token")
 		myEvents    = flag.Bool("my-events", false, "Only receive events for authenticated user")
 		userMode    = flag.Bool("user", false, "Subscribe to your events across all organizations")

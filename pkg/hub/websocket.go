@@ -18,14 +18,14 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
 )
 
-// Constants for WebSocket timeouts.
+// Constants for WebSocket timeouts and limits.
 const (
-	pingInterval   = 54 * time.Second
-	readDeadline   = 60 * time.Second
-	writeTimeout   = 10 * time.Second
-	minTokenLength = 40  // Minimum GitHub token length
-	maxTokenLength = 255 // Maximum GitHub token length
-	charsetLength  = 8   // Length of random suffix for client ID
+	pingInterval        = 54 * time.Second
+	readDeadline        = 60 * time.Second
+	writeTimeout        = 10 * time.Second
+	minTokenLength      = 40   // Minimum GitHub token length
+	maxTokenLength      = 255  // Maximum GitHub token length
+	maxSubscriptionSize = 8192 // Maximum subscription message size (8KB)
 )
 
 // GitHub token validation regex
@@ -105,6 +105,9 @@ func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (st
 func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subscription, error) {
 	var sub Subscription
 
+	// Set max frame length to prevent DoS via large messages
+	ws.MaxPayloadBytes = maxSubscriptionSize
+
 	if h.testMode {
 		// In test mode, accept a test subscription that includes username
 		type testSubscription struct {
@@ -149,6 +152,52 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 	// If organization is specified, validate membership
 	if sub.Organization != "" {
+		// Handle wildcard organization - user wants to subscribe to all their orgs
+		if sub.Organization == "*" {
+			logger.Info("validating GitHub authentication for wildcard org subscription", logger.Fields{
+				"ip": ip,
+			})
+
+			username, userOrgs, err := ghClient.GetUserAndOrgs(ctx)
+			if err != nil {
+				logger.Error("GitHub auth failed", err, logger.Fields{
+					"ip": ip,
+				})
+
+				// Send error response to client
+				errorResp := map[string]string{
+					"type":    "error",
+					"error":   "authentication_failed",
+					"message": "Authentication failed. Please check your GitHub token.",
+				}
+
+				// Set a write deadline to ensure we don't hang forever
+				if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+					logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
+					return nil, err
+				}
+
+				if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+					logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
+					return nil, sendErr
+				}
+
+				logger.Info("sent authentication error to client", logger.Fields{"ip": ip})
+				return nil, errors.New("authentication failed")
+			}
+
+			logger.Info("GitHub authentication successful for wildcard org subscription", logger.Fields{
+				"ip":        ip,
+				"username":  username,
+				"org_count": len(userOrgs),
+			})
+
+			// Set the authenticated username in subscription
+			sub.Username = username
+			return userOrgs, nil
+		}
+
+		// Regular org subscription - validate specific membership
 		logger.Info("validating GitHub authentication and org membership", logger.Fields{
 			"ip":  ip,
 			"org": sub.Organization,
@@ -318,18 +367,19 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
-	// Create client with unique ID using crypto-random suffix
+	// Create client with unique ID using crypto-random only (no timestamp for security)
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	suffix := make([]byte, charsetLength)
-	for i := range suffix {
+	const idLength = 16 // Increase length for better entropy (16 chars = ~95 bits)
+	id := make([]byte, idLength)
+	for i := range id {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
 			logger.Error("failed to generate random client ID", err, logger.Fields{"ip": ip})
 			return
 		}
-		suffix[i] = charset[n.Int64()]
+		id[i] = charset[n.Int64()]
 	}
-	clientID := fmt.Sprintf("%d-%s", time.Now().UnixNano(), string(suffix))
+	clientID := string(id)
 	client := NewClient(
 		clientID,
 		sub,

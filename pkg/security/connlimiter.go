@@ -10,6 +10,7 @@ import (
 
 const (
 	staleTimeout = 10 * time.Minute // Time after which inactive entries are considered stale
+	maxIPEntries = 10000            // Maximum number of IP entries to prevent memory exhaustion
 )
 
 // connectionInfo tracks connection count and last activity time.
@@ -50,6 +51,15 @@ func (cl *ConnectionLimiter) Add(ip string) bool {
 
 	info := cl.perIP[ip]
 	if info == nil {
+		// Prevent memory exhaustion by limiting total IP entries
+		if len(cl.perIP) >= maxIPEntries {
+			// Find and remove the oldest inactive entry to make room
+			cl.evictOldestInactive()
+			// If still at limit after eviction, deny the connection
+			if len(cl.perIP) >= maxIPEntries {
+				return false
+			}
+		}
 		info = &connectionInfo{}
 		cl.perIP[ip] = info
 	}
@@ -114,6 +124,24 @@ func (cl *ConnectionLimiter) cleanup() {
 
 	if cleaned > 0 {
 		log.Printf("ConnectionLimiter: cleaned up %d stale IP entries", cleaned)
+	}
+}
+
+// evictOldestInactive removes the oldest inactive entry (must be called with lock held).
+func (cl *ConnectionLimiter) evictOldestInactive() {
+	var oldestIP string
+	var oldestTime time.Time
+
+	// Find the oldest inactive entry
+	for ip, info := range cl.perIP {
+		if info.count == 0 && (oldestIP == "" || info.lastActive.Before(oldestTime)) {
+			oldestIP = ip
+			oldestTime = info.lastActive
+		}
+	}
+
+	if oldestIP != "" {
+		delete(cl.perIP, oldestIP)
 	}
 }
 
