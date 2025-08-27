@@ -3,7 +3,10 @@ package client_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
@@ -72,4 +75,63 @@ func ExampleClient_gracefulShutdown() {
 
 	// Gracefully stop the client
 	c.Stop()
+}
+
+func ExampleClient_customLogger() {
+	// Example 1: Silence all logs
+	silentLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Example 2: JSON logging to a file
+	logFile, err := os.Create("client.log")
+	if err == nil {
+		defer func() {
+			if err := logFile.Close(); err != nil {
+				log.Printf("Failed to close log file: %v", err)
+			}
+		}()
+	}
+	var jsonLogger *slog.Logger
+	if logFile != nil {
+		jsonLogger = slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
+	}
+
+	// Example 3: Structured logging with custom format
+	structuredLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	// Use the silent logger for a client that produces no output
+	config := client.Config{
+		ServerURL:    "wss://hook.example.com/ws",
+		Organization: "myorg",
+		Token:        "ghp_yourtoken",
+		Logger:       silentLogger, // No log output
+	}
+
+	c, err := client.New(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Alternative: use the JSON logger
+	if jsonLogger != nil {
+		config.Logger = jsonLogger
+		c2, err := client.New(config)
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = c2
+	}
+
+	// Alternative: use structured text logger
+	config.Logger = structuredLogger
+	c3, err := client.New(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_ = c
+	_ = c3
 }
