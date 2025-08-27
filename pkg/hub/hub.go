@@ -94,7 +94,7 @@ func (h *Hub) Run(ctx context.Context) {
 			matched := 0
 			dropped := 0
 			for _, client := range clientSnapshot {
-				if matches(client.subscription, msg.event, msg.payload) {
+				if matches(client.subscription, msg.event, msg.payload, client.userOrgs) {
 					// Non-blocking send
 					select {
 					case client.send <- msg.event:

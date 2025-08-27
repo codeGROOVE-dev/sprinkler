@@ -134,58 +134,110 @@ func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subs
 }
 
 // validateAuth validates the GitHub authentication and organization membership.
-func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn, sub *Subscription, githubToken, ip string) error {
+// Returns the list of organizations the user is a member of.
+func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn, sub *Subscription, githubToken, ip string) ([]string, error) {
 	if h.testMode {
 		// In test mode, Username is already set from the test subscription
-		return nil
+		// Return the single org they're subscribing to if specified
+		if sub.Organization != "" {
+			return []string{sub.Organization}, nil
+		}
+		return []string{}, nil
 	}
 
-	logger.Info("validating GitHub authentication and org membership", logger.Fields{
-		"ip":  ip,
-		"org": sub.Organization,
-	})
-
-	// Validate GitHub token and org membership
 	ghClient := github.NewClient(githubToken)
-	username, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
-	if err != nil {
-		logger.Error("GitHub auth failed", err, logger.Fields{
+
+	// If organization is specified, validate membership
+	if sub.Organization != "" {
+		logger.Info("validating GitHub authentication and org membership", logger.Fields{
 			"ip":  ip,
 			"org": sub.Organization,
 		})
 
+		username, userOrgs, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
+		if err != nil {
+			logger.Error("GitHub auth failed", err, logger.Fields{
+				"ip":  ip,
+				"org": sub.Organization,
+			})
+
+			// Send error response to client
+			errorResp := map[string]string{
+				"type":  "error",
+				"error": "access_denied",
+				"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
+					"Please ensure you are a member of this organization.", sub.Organization),
+			}
+
+			// Set a write deadline to ensure we don't hang forever
+			if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
+				return nil, err
+			}
+
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
+				return nil, sendErr
+			}
+
+			logger.Info("sent access denied error to client", logger.Fields{"ip": ip, "org": sub.Organization})
+			return nil, errors.New("access denied")
+		}
+
+		logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
+			"ip":        ip,
+			"org":       sub.Organization,
+			"username":  username,
+			"org_count": len(userOrgs),
+		})
+
+		// Set the authenticated username in subscription
+		sub.Username = username
+		return userOrgs, nil
+	}
+
+	// No organization specified - just get user info and all their orgs
+	logger.Info("validating GitHub authentication (no specific org)", logger.Fields{
+		"ip": ip,
+	})
+
+	username, userOrgs, err := ghClient.GetUserAndOrgs(ctx)
+	if err != nil {
+		logger.Error("GitHub auth failed", err, logger.Fields{
+			"ip": ip,
+		})
+
 		// Send error response to client
 		errorResp := map[string]string{
-			"type":  "error",
-			"error": "access_denied",
-			"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
-				"Please ensure you are a member of this organization.", sub.Organization),
+			"type":    "error",
+			"error":   "authentication_failed",
+			"message": "Authentication failed. Please check your GitHub token.",
 		}
 
 		// Set a write deadline to ensure we don't hang forever
 		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
 			logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
-			return err
+			return nil, err
 		}
 
 		if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
 			logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
-			return sendErr
+			return nil, sendErr
 		}
 
-		logger.Info("sent access denied error to client", logger.Fields{"ip": ip, "org": sub.Organization})
-		return errors.New("access denied")
+		logger.Info("sent authentication error to client", logger.Fields{"ip": ip})
+		return nil, errors.New("authentication failed")
 	}
 
-	logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
-		"ip":       ip,
-		"org":      sub.Organization,
-		"username": username,
+	logger.Info("GitHub authentication successful", logger.Fields{
+		"ip":        ip,
+		"username":  username,
+		"org_count": len(userOrgs),
 	})
 
 	// Set the authenticated username in subscription
 	sub.Username = username
-	return nil
+	return userOrgs, nil
 }
 
 // Handle handles a WebSocket connection.
@@ -234,11 +286,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
-	// Validate subscription
-	if sub.Organization == "" {
-		log.Printf("empty subscription from %s - no organization provided", ip)
-		return
-	}
+	// Organization is optional for PR subscriptions and MyEventsOnly mode
 
 	// Validate subscription data
 	if err := sub.Validate(); err != nil {
@@ -265,7 +313,8 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	}
 
 	// Validate authentication and set username
-	if err := h.validateAuth(ctx, ws, &sub, githubToken, ip); err != nil {
+	userOrgs, err := h.validateAuth(ctx, ws, &sub, githubToken, ip)
+	if err != nil {
 		return
 	}
 
@@ -286,6 +335,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		sub,
 		ws,
 		h.hub,
+		userOrgs,
 	)
 
 	logger.Info("WebSocket connection established", logger.Fields{

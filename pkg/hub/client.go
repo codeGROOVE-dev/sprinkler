@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,11 +18,19 @@ type Client struct {
 	done         chan struct{}
 	ID           string
 	subscription Subscription
+	userOrgs     map[string]bool // Set of organizations the user is a member of (lowercase)
 	closeOnce    sync.Once
 }
 
 // NewClient creates a new client.
-func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub) *Client {
+func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string) *Client {
+	// Build a map for O(1) org membership lookups
+	orgsMap := make(map[string]bool, len(userOrgs))
+	for _, org := range userOrgs {
+		// Store org names in lowercase for case-insensitive comparison
+		orgsMap[strings.ToLower(org)] = true
+	}
+
 	return &Client{
 		ID:           id,
 		subscription: sub,
@@ -29,6 +38,7 @@ func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub) *Cli
 		send:         make(chan Event, 100), // Increased buffer to reduce dropped messages
 		hub:          hub,
 		done:         make(chan struct{}),
+		userOrgs:     orgsMap,
 	}
 }
 

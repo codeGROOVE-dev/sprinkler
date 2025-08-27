@@ -131,45 +131,50 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 	return user, nil
 }
 
-// ValidateOrgMembership checks if the authenticated user has access to the specified organization.
-// Returns the authenticated user's username and nil error if successful.
-func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string, error) {
-	log.Printf("GitHub API: Starting authentication and org membership validation for org '%s'", org)
+// GetUserAndOrgs retrieves the authenticated user's username and list of organizations.
+// Returns username, list of organization names, and error.
+func (c *Client) GetUserAndOrgs(ctx context.Context) (string, []string, error) {
+	log.Print("GitHub API: Starting authentication and fetching user organizations")
 
 	// First get the authenticated user (already has retry logic)
 	log.Print("GitHub API: Getting authenticated user info...")
 	user, err := c.AuthenticatedUser(ctx)
 	if err != nil {
 		log.Printf("GitHub API: Failed to get authenticated user: %v", err)
-		return "", fmt.Errorf("failed to get authenticated user: %w", err)
+		return "", nil, fmt.Errorf("failed to get authenticated user: %w", err)
 	}
 	log.Printf("GitHub API: Successfully authenticated as user '%s'", user.Login)
 
-	// Sanitize org name
-	org = strings.TrimSpace(org)
-	if org == "" {
-		return "", errors.New("organization name cannot be empty")
+	// Get user's organizations
+	orgs, err := c.getUserOrganizations(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to get user organizations: %w", err)
 	}
 
-	// Validate org name format (GitHub org names can only contain alphanumeric, hyphen, underscore)
-	for _, r := range org {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' {
-			return "", errors.New("invalid organization name format")
-		}
+	// Build list of org names
+	orgNames := make([]string, len(orgs))
+	for i, o := range orgs {
+		orgNames[i] = o.Login
 	}
 
-	// Organization struct to match GitHub API response
-	type Organization struct {
-		Login string `json:"login"`
-	}
+	log.Printf("GitHub API: User '%s' is member of %d organizations", user.Login, len(orgs))
+	return user.Login, orgNames, nil
+}
 
+// Organization struct to match GitHub API response.
+type Organization struct {
+	Login string `json:"login"`
+}
+
+// getUserOrganizations fetches all organizations the authenticated user is a member of.
+func (c *Client) getUserOrganizations(ctx context.Context) ([]Organization, error) {
 	var orgs []Organization
 	var lastErr error
 
-	log.Printf("GitHub API: Checking organization membership for user '%s'...", user.Login)
+	log.Print("GitHub API: Fetching user's organizations...")
 
 	// Retry org membership check with exponential backoff
-	err = retry.Do(
+	err := retry.Do(
 		func() error {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/orgs", http.NoBody)
 			if err != nil {
@@ -180,11 +185,10 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 			req.Header.Set("Accept", "application/vnd.github.v3+json")
 			req.Header.Set("User-Agent", "webhook-sprinkler/1.0")
 
-			log.Printf("GitHub API: Making request to %s", req.URL.String())
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
-				log.Printf("GitHub API org membership check failed (will retry): %v", err)
+				log.Printf("GitHub API org fetch failed (will retry): %v", err)
 				return err // Retry on network errors
 			}
 			defer func() {
@@ -199,36 +203,31 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 				return err // Retry on read errors
 			}
 
-			log.Printf("GitHub API: Received response status %d", resp.StatusCode)
-
 			switch resp.StatusCode {
 			case http.StatusOK:
 				// Successfully got user's organizations
 				if err := json.Unmarshal(body, &orgs); err != nil {
 					return retry.Unrecoverable(fmt.Errorf("failed to parse organizations response: %w", err))
 				}
-				log.Printf("GitHub API: Retrieved %d organizations for user '%s'", len(orgs), user.Login)
 				return nil
 
 			case http.StatusUnauthorized:
-				log.Print("GitHub API: Token is invalid or expired")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
 				// Check if it's a rate limit issue
-				if resp.Header.Get("X-RateLimit-Remaining") == "0" { //nolint:canonicalheader // GitHub API header
-					resetTime := resp.Header.Get("X-RateLimit-Reset") //nolint:canonicalheader // GitHub API header
-					log.Printf("GitHub API rate limit hit for org membership check, reset at %s", resetTime)
+				if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+					resetTime := resp.Header.Get("X-RateLimit-Reset")
+					log.Printf("GitHub API rate limit hit, reset at %s", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
-				log.Print("GitHub API: Access forbidden when checking organization membership")
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API org membership check server error %d (will retry)", resp.StatusCode)
+				log.Printf("GitHub API server error %d (will retry)", resp.StatusCode)
 				return lastErr
 
 			default:
@@ -242,29 +241,50 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 		retry.Context(ctx),
 	)
 	if err != nil {
-		log.Printf("GitHub API: Org membership check failed after retries: %v", err)
 		if lastErr != nil {
-			return "", lastErr
+			return nil, lastErr
 		}
-		return "", err
+		return nil, err
+	}
+
+	return orgs, nil
+}
+
+// ValidateOrgMembership checks if the authenticated user has access to the specified organization.
+// Returns the authenticated user's username, list of all their organizations, and nil error if successful.
+func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string, []string, error) {
+	log.Printf("GitHub API: Starting authentication and org membership validation for org '%s'", org)
+
+	// Sanitize org name
+	org = strings.TrimSpace(org)
+	if org == "" {
+		return "", nil, errors.New("organization name cannot be empty")
+	}
+
+	// Validate org name format (GitHub org names can only contain alphanumeric, hyphen, underscore)
+	for _, r := range org {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return "", nil, errors.New("invalid organization name format")
+		}
+	}
+
+	// Get user and all their organizations
+	username, orgNames, err := c.GetUserAndOrgs(ctx)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Check if the requested organization is in the user's membership list
-	for _, userOrg := range orgs {
-		if strings.EqualFold(userOrg.Login, org) {
-			log.Printf("GitHub API: User '%s' is a member of organization '%s'", user.Login, org)
-			return user.Login, nil
+	for _, userOrg := range orgNames {
+		if strings.EqualFold(userOrg, org) {
+			log.Printf("GitHub API: User '%s' is a member of organization '%s'", username, org)
+			log.Printf("GitHub API: User is member of %d total organizations", len(orgNames))
+			return username, orgNames, nil
 		}
 	}
 
 	// User is not a member of the requested organization
-	log.Printf("GitHub API: User '%s' is NOT a member of organization '%s'", user.Login, org)
-	log.Printf("GitHub API: User is member of %d organizations: %v", len(orgs), func() []string {
-		orgNames := make([]string, len(orgs))
-		for i, o := range orgs {
-			orgNames[i] = o.Login
-		}
-		return orgNames
-	}())
-	return "", errors.New("user is not a member of the requested organization")
+	log.Printf("GitHub API: User '%s' is NOT a member of organization '%s'", username, org)
+	log.Printf("GitHub API: User is member of %d organizations: %v", len(orgNames), orgNames)
+	return "", nil, errors.New("user is not a member of the requested organization")
 }
