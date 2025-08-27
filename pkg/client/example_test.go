@@ -12,13 +12,13 @@ import (
 func ExampleClient() {
 	// Create client configuration
 	config := client.Config{
-		ServerURL:    "wss://hook.example.com/ws",
-		Organization: "myorg",
-		Token:        "ghp_yourtoken",
-		EventTypes:   []string{"pull_request", "issue_comment"},
+		ServerURL:      "wss://hook.example.com/ws",
+		Organization:   "myorg",
+		Token:          "ghp_yourtoken",
+		EventTypes:     []string{"pull_request", "issue_comment"},
 		UserEventsOnly: true,
-		Verbose:      false,
-		MaxRetries:   5,
+		Verbose:        false,
+		MaxRetries:     5,
 		OnEvent: func(event client.Event) {
 			// Process each event
 			fmt.Printf("Event: %s at %s\n", event.Type, event.URL)

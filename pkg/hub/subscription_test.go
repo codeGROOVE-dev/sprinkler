@@ -545,7 +545,7 @@ func TestValidateSubscription(t *testing.T) {
 		{
 			name: "all fields valid",
 			sub: Subscription{
-				Organization: "myorg",
+				Organization:   "myorg",
 				UserEventsOnly: true,
 			},
 			wantErr: false,

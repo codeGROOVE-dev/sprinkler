@@ -23,11 +23,11 @@ var (
 
 // Subscription represents a client's subscription criteria.
 type Subscription struct {
-	Organization string   `json:"organization"`
-	Username     string   `json:"-"`
-	EventTypes   []string `json:"event_types,omitempty"`
+	Organization   string   `json:"organization"`
+	Username       string   `json:"-"`
+	EventTypes     []string `json:"event_types,omitempty"`
 	UserEventsOnly bool     `json:"user_events_only,omitempty"`
-	PullRequests []string `json:"pull_requests,omitempty"` // List of PR URLs to subscribe to
+	PullRequests   []string `json:"pull_requests,omitempty"` // List of PR URLs to subscribe to
 }
 
 // Validate performs security validation on subscription data.

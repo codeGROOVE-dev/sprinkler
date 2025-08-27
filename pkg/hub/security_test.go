@@ -156,28 +156,28 @@ func TestParsePRURLSecurity(t *testing.T) {
 		wantNum   int
 	}{
 		{
-			name:    "URL with encoded characters",
-			prURL:   "https://github.com/org%2F..%2F..%2Fetc/repo/pull/1",
-			wantErr: false, // Currently passes - the parsing splits on /
+			name:      "URL with encoded characters",
+			prURL:     "https://github.com/org%2F..%2F..%2Fetc/repo/pull/1",
+			wantErr:   false, // Currently passes - the parsing splits on /
 			wantOwner: "org%2F..%2F..%2Fetc",
-			wantRepo: "repo",
-			wantNum: 1,
+			wantRepo:  "repo",
+			wantNum:   1,
 		},
 		{
-			name:    "URL with newlines",
-			prURL:   "https://github.com/org\n/repo/pull/1",
-			wantErr: false, // parsePRUrl doesn't validate for these characters
+			name:      "URL with newlines",
+			prURL:     "https://github.com/org\n/repo/pull/1",
+			wantErr:   false, // parsePRUrl doesn't validate for these characters
 			wantOwner: "org\n",
-			wantRepo: "repo",
-			wantNum: 1,
+			wantRepo:  "repo",
+			wantNum:   1,
 		},
 		{
-			name:    "URL with tabs",
-			prURL:   "https://github.com/org\t/repo/pull/1",
-			wantErr: false, // parsePRUrl doesn't validate for these characters
+			name:      "URL with tabs",
+			prURL:     "https://github.com/org\t/repo/pull/1",
+			wantErr:   false, // parsePRUrl doesn't validate for these characters
 			wantOwner: "org\t",
-			wantRepo: "repo",
-			wantNum: 1,
+			wantRepo:  "repo",
+			wantNum:   1,
 		},
 		{
 			name:    "URL with very large PR number",
@@ -185,28 +185,28 @@ func TestParsePRURLSecurity(t *testing.T) {
 			wantErr: true, // Should fail parsing as int
 		},
 		{
-			name:    "URL with float PR number",
-			prURL:   "https://github.com/org/repo/pull/1.5",
-			wantErr: false, // Sscanf will parse the integer part
+			name:      "URL with float PR number",
+			prURL:     "https://github.com/org/repo/pull/1.5",
+			wantErr:   false, // Sscanf will parse the integer part
 			wantOwner: "org",
-			wantRepo: "repo",
-			wantNum: 1,
+			wantRepo:  "repo",
+			wantNum:   1,
 		},
 		{
-			name:    "URL with hex PR number",
-			prURL:   "https://github.com/org/repo/pull/0x1234",
-			wantErr: false, // Sscanf reads 0
+			name:      "URL with hex PR number",
+			prURL:     "https://github.com/org/repo/pull/0x1234",
+			wantErr:   false, // Sscanf reads 0
 			wantOwner: "org",
-			wantRepo: "repo",
-			wantNum: 0,
+			wantRepo:  "repo",
+			wantNum:   0,
 		},
 		{
-			name:    "URL with empty components",
-			prURL:   "https://github.com///pull/1",
-			wantErr: false, // Empty strings for owner/repo
+			name:      "URL with empty components",
+			prURL:     "https://github.com///pull/1",
+			wantErr:   false, // Empty strings for owner/repo
 			wantOwner: "",
-			wantRepo: "",
-			wantNum: 1,
+			wantRepo:  "",
+			wantNum:   1,
 		},
 		{
 			name:    "URL with only github.com",
@@ -328,7 +328,7 @@ func TestMatchesSecurityEdgeCases(t *testing.T) {
 			name: "mention with malicious username pattern",
 			sub: Subscription{
 				UserEventsOnly: true,
-				Username:     "user",
+				Username:       "user",
 			},
 			event: Event{Type: "issue_comment"},
 			payload: map[string]any{
@@ -385,10 +385,10 @@ func TestMatchesSecurityEdgeCases(t *testing.T) {
 func TestClientIDGeneration(t *testing.T) {
 	// This test is more about ensuring IDs are unique and random
 	// In the actual code, we use crypto/rand with 32 characters
-	
+
 	ids := make(map[string]bool)
 	const numIDs = 10000
-	
+
 	// Simulate ID generation (in real code this is in websocket.go)
 	for i := 0; i < numIDs; i++ {
 		// Generate a simple ID for testing uniqueness concept
@@ -399,7 +399,7 @@ func TestClientIDGeneration(t *testing.T) {
 		}
 		ids[id] = true
 	}
-	
+
 	if len(ids) != numIDs {
 		t.Errorf("Expected %d unique IDs, got %d", numIDs, len(ids))
 	}

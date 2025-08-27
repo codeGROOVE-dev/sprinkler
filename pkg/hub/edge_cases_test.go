@@ -23,8 +23,8 @@ func TestWildcardOrganizationEdgeCases(t *testing.T) {
 				Organization: "*",
 				Username:     "testuser",
 			},
-			eventOrg: "someorg",
-			userOrgs: map[string]bool{}, // Empty org list
+			eventOrg:  "someorg",
+			userOrgs:  map[string]bool{}, // Empty org list
 			eventType: "pull_request",
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -41,8 +41,8 @@ func TestWildcardOrganizationEdgeCases(t *testing.T) {
 				Organization: "*",
 				Username:     "testuser",
 			},
-			eventOrg: "someorg",
-			userOrgs: nil, // Nil map
+			eventOrg:  "someorg",
+			userOrgs:  nil, // Nil map
 			eventType: "pull_request",
 			payload: map[string]any{
 				"repository": map[string]any{
@@ -315,7 +315,7 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 // TestConcurrentMapAccess tests for race conditions in map access
 func TestConcurrentMapAccess(t *testing.T) {
 	hub := NewHub()
-	
+
 	for i := 0; i < 10; i++ {
 		client := NewClient(
 			fmt.Sprintf("client%d", i),
@@ -329,7 +329,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 		)
 		hub.clients[client.ID] = client
 	}
-	
+
 	// Simulate concurrent event broadcasts
 	done := make(chan bool)
 	for i := 0; i < 100; i++ {
@@ -345,7 +345,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 					},
 				},
 			}
-			
+
 			// Test concurrent matching
 			for _, client := range hub.clients {
 				matches(client.subscription, event, payload, client.userOrgs)
@@ -353,7 +353,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 			done <- true
 		}(i)
 	}
-	
+
 	// Wait for all goroutines
 	for i := 0; i < 100; i++ {
 		<-done
@@ -363,11 +363,11 @@ func TestConcurrentMapAccess(t *testing.T) {
 // TestChannelBufferOverflow tests behavior when channels are full
 func TestChannelBufferOverflow(t *testing.T) {
 	hub := NewHub()
-	
+
 	// Fill the broadcast channel to capacity
 	for i := 0; i < broadcastBufferSize; i++ {
 		msg := broadcastMsg{
-			event: Event{Type: "test"},
+			event:   Event{Type: "test"},
 			payload: map[string]any{},
 		}
 		select {
@@ -377,13 +377,13 @@ func TestChannelBufferOverflow(t *testing.T) {
 			t.Errorf("Channel should not be full at message %d", i)
 		}
 	}
-	
+
 	// Try to send one more - should not block
 	extraMsg := broadcastMsg{
-		event: Event{Type: "overflow"},
+		event:   Event{Type: "overflow"},
 		payload: map[string]any{},
 	}
-	
+
 	select {
 	case hub.broadcast <- extraMsg:
 		t.Error("Should not be able to send when buffer is full")
@@ -449,12 +449,12 @@ func TestEmptyEventPayload(t *testing.T) {
 			shouldMatch: false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			event := Event{Type: "pull_request"}
 			userOrgs := map[string]bool{"myorg": true}
-			
+
 			// This should not panic
 			result := matches(tt.sub, event, tt.payload, userOrgs)
 			if result != tt.shouldMatch {
