@@ -15,7 +15,7 @@
 
 </div>
 
-GitHub only allows one webhook endpoint per app. This service multiplexes that single webhook into authenticated WebSocket connections, so multiple clients can subscribe to just the events they care about.
+GitHub only allows one webhook endpoint per GitHub App. This service multiplexes that single webhook into authenticated WebSocket connections, so multiple clients can subscribe to just the events they care about.
 
 ## Quick start
 
