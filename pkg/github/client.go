@@ -131,9 +131,9 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 	return user, nil
 }
 
-// GetUserAndOrgs retrieves the authenticated user's username and list of organizations.
+// UserAndOrgs retrieves the authenticated user's username and list of organizations.
 // Returns username, list of organization names, and error.
-func (c *Client) GetUserAndOrgs(ctx context.Context) (string, []string, error) {
+func (c *Client) UserAndOrgs(ctx context.Context) (string, []string, error) {
 	log.Print("GitHub API: Starting authentication and fetching user organizations")
 
 	// First get the authenticated user (already has retry logic)
@@ -269,7 +269,7 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string,
 	}
 
 	// Get user and all their organizations
-	username, orgNames, err := c.GetUserAndOrgs(ctx)
+	username, orgNames, err := c.UserAndOrgs(ctx)
 	if err != nil {
 		return "", nil, err
 	}

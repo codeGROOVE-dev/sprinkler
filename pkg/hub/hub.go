@@ -36,13 +36,20 @@ type broadcastMsg struct {
 	event   Event
 }
 
+const (
+	// Channel buffer sizes
+	registerBufferSize   = 100
+	unregisterBufferSize = 100
+	broadcastBufferSize  = 1000
+)
+
 // NewHub creates a new client hub.
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[string]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan string),
-		broadcast:  make(chan broadcastMsg),
+		register:   make(chan *Client, registerBufferSize),       // Buffer to prevent blocking
+		unregister: make(chan string, unregisterBufferSize),      // Buffer to prevent blocking
+		broadcast:  make(chan broadcastMsg, broadcastBufferSize), // Limited buffer to prevent memory exhaustion
 		stop:       make(chan struct{}),
 		stopped:    make(chan struct{}),
 	}

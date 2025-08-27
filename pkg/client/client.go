@@ -24,12 +24,6 @@ func (e *AuthenticationError) Error() string {
 	return e.message
 }
 
-// IsAuthenticationError checks if an error is an authentication error.
-func IsAuthenticationError(err error) bool {
-	var authErr *AuthenticationError
-	return errors.As(err, &authErr)
-}
-
 const (
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -80,8 +74,8 @@ func New(config Config) (*Client, error) {
 	if config.ServerURL == "" {
 		return nil, errors.New("serverURL is required")
 	}
-	if config.Organization == "" {
-		return nil, errors.New("organization is required")
+	if config.Organization == "" && len(config.PullRequests) == 0 && !config.MyEventsOnly {
+		return nil, errors.New("organization, pull requests, or my-events-only required")
 	}
 	if config.Token == "" {
 		return nil, errors.New("token is required")
@@ -133,7 +127,8 @@ func (c *Client) Start(ctx context.Context) error {
 		// Handle connection result
 		if err != nil {
 			// Check if it's an authentication error - don't retry these
-			if IsAuthenticationError(err) {
+			var authErr *AuthenticationError
+			if errors.As(err, &authErr) {
 				log.Print(separatorLine)
 				log.Print("AUTHENTICATION FAILED!")
 				log.Printf("Error: %v", err)
@@ -222,13 +217,11 @@ func (c *Client) EventCount() int {
 func (c *Client) connect(ctx context.Context) error {
 	log.Print(">>> Establishing WebSocket connection...")
 
-	// Parse origin from URL
+	// Create WebSocket config with appropriate origin
 	origin := "http://localhost/"
 	if strings.HasPrefix(c.config.ServerURL, "wss://") {
 		origin = "https://localhost/"
 	}
-
-	// Create WebSocket config
 	wsConfig, err := websocket.NewConfig(c.config.ServerURL, origin)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
@@ -347,7 +340,11 @@ func (c *Client) connect(ctx context.Context) error {
 	if responseType == "subscription_confirmed" {
 		log.Print("✓ Subscription confirmed by server!")
 		if org, ok := firstResponse["organization"].(string); ok {
-			log.Printf("  Organization: %s", org)
+			if org == "*" {
+				log.Print("  Organization: * (all your organizations)")
+			} else {
+				log.Printf("  Organization: %s", org)
+			}
 		}
 		if username, ok := firstResponse["username"].(string); ok {
 			log.Printf("  Username: %s", username)
