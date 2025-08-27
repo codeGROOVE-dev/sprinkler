@@ -11,6 +11,7 @@ const (
 	maxEventTypeCount     = 50  // Reasonable limit for number of event types
 	maxEventTypeLength    = 50  // Max length of individual event type
 	maxPRsPerSubscription = 200 // Maximum number of PRs to subscribe to
+	maxPRURLLength        = 500 // Maximum length of a PR URL
 )
 
 var (
@@ -79,6 +80,11 @@ func (s *Subscription) Validate() error {
 				return errors.New("empty PR URL")
 			}
 
+			// Limit URL length to prevent memory exhaustion
+			if len(prURL) > maxPRURLLength {
+				return errors.New("PR URL too long")
+			}
+
 			// Basic validation - should be a GitHub PR URL
 			// Format: https://github.com/owner/repo/pull/number
 			if !strings.HasPrefix(prURL, "https://github.com/") && !strings.HasPrefix(prURL, "http://github.com/") {
@@ -88,6 +94,15 @@ func (s *Subscription) Validate() error {
 			// Check if it contains /pull/
 			if !strings.Contains(prURL, "/pull/") {
 				return errors.New("URL must be a pull request URL")
+			}
+
+			// Validate the URL can be parsed to prevent injection
+			owner, repo, prNum, err := parsePRUrl(prURL)
+			if err != nil {
+				return errors.New("invalid PR URL structure")
+			}
+			if owner == "" || repo == "" || prNum <= 0 {
+				return errors.New("invalid PR URL components")
 			}
 		}
 	}

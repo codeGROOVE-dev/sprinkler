@@ -24,9 +24,17 @@ type Client struct {
 
 // NewClient creates a new client.
 func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string) *Client {
+	// Limit the number of orgs to prevent memory exhaustion
+	const maxOrgs = 1000
+	orgsToProcess := userOrgs
+	if len(userOrgs) > maxOrgs {
+		orgsToProcess = userOrgs[:maxOrgs]
+		log.Printf("WARNING: User has %d organizations, limiting to %d", len(userOrgs), maxOrgs)
+	}
+
 	// Build a map for O(1) org membership lookups
-	orgsMap := make(map[string]bool, len(userOrgs))
-	for _, org := range userOrgs {
+	orgsMap := make(map[string]bool, len(orgsToProcess))
+	for _, org := range orgsToProcess {
 		// Store org names in lowercase for case-insensitive comparison
 		orgsMap[strings.ToLower(org)] = true
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"log"
 	"math/big"
 	"regexp"
@@ -158,7 +157,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 				"ip": ip,
 			})
 
-			username, userOrgs, err := ghClient.GetUserAndOrgs(ctx)
+			username, userOrgs, err := ghClient.UserAndOrgs(ctx)
 			if err != nil {
 				logger.Error("GitHub auth failed", err, logger.Fields{
 					"ip": ip,
@@ -168,7 +167,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 				errorResp := map[string]string{
 					"type":    "error",
 					"error":   "authentication_failed",
-					"message": "Authentication failed. Please check your GitHub token.",
+					"message": "Authentication failed.",
 				}
 
 				// Set a write deadline to ensure we don't hang forever
@@ -212,10 +211,9 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 			// Send error response to client
 			errorResp := map[string]string{
-				"type":  "error",
-				"error": "access_denied",
-				"message": fmt.Sprintf("Access denied: You don't have access to organization '%s'. "+
-					"Please ensure you are a member of this organization.", sub.Organization),
+				"type":    "error",
+				"error":   "access_denied",
+				"message": "Access denied.",
 			}
 
 			// Set a write deadline to ensure we don't hang forever
@@ -250,7 +248,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 		"ip": ip,
 	})
 
-	username, userOrgs, err := ghClient.GetUserAndOrgs(ctx)
+	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
 	if err != nil {
 		logger.Error("GitHub auth failed", err, logger.Fields{
 			"ip": ip,
@@ -369,7 +367,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 
 	// Create client with unique ID using crypto-random only (no timestamp for security)
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const idLength = 16 // Increase length for better entropy (16 chars = ~95 bits)
+	const idLength = 32 // Increased for better entropy (32 chars = ~190 bits)
 	id := make([]byte, idLength)
 	for i := range id {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
@@ -379,9 +377,8 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		}
 		id[i] = charset[n.Int64()]
 	}
-	clientID := string(id)
 	client := NewClient(
-		clientID,
+		string(id),
 		sub,
 		ws,
 		h.hub,

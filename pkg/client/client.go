@@ -24,12 +24,6 @@ func (e *AuthenticationError) Error() string {
 	return e.message
 }
 
-// IsAuthenticationError checks if an error is an authentication error.
-func IsAuthenticationError(err error) bool {
-	var authErr *AuthenticationError
-	return errors.As(err, &authErr)
-}
-
 const (
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -133,7 +127,8 @@ func (c *Client) Start(ctx context.Context) error {
 		// Handle connection result
 		if err != nil {
 			// Check if it's an authentication error - don't retry these
-			if IsAuthenticationError(err) {
+			var authErr *AuthenticationError
+			if errors.As(err, &authErr) {
 				log.Print(separatorLine)
 				log.Print("AUTHENTICATION FAILED!")
 				log.Printf("Error: %v", err)
@@ -222,13 +217,11 @@ func (c *Client) EventCount() int {
 func (c *Client) connect(ctx context.Context) error {
 	log.Print(">>> Establishing WebSocket connection...")
 
-	// Parse origin from URL
+	// Create WebSocket config with appropriate origin
 	origin := "http://localhost/"
 	if strings.HasPrefix(c.config.ServerURL, "wss://") {
 		origin = "https://localhost/"
 	}
-
-	// Create WebSocket config
 	wsConfig, err := websocket.NewConfig(c.config.ServerURL, origin)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)

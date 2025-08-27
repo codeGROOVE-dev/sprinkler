@@ -5,6 +5,7 @@ package logger
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 )
 
@@ -13,9 +14,16 @@ type Fields map[string]any
 
 // WithFields adds structured context to log messages.
 func WithFields(fields Fields, format string, args ...any) {
+	// Sort keys for consistent output
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var parts []string
-	for k, v := range fields {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, fields[k]))
 	}
 
 	msg := fmt.Sprintf(format, args...)
