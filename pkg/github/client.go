@@ -133,7 +133,7 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 
 // UserAndOrgs retrieves the authenticated user's username and list of organizations.
 // Returns username, list of organization names, and error.
-func (c *Client) UserAndOrgs(ctx context.Context) (string, []string, error) {
+func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []string, err error) {
 	log.Print("GitHub API: Starting authentication and fetching user organizations")
 
 	// First get the authenticated user (already has retry logic)
@@ -146,18 +146,18 @@ func (c *Client) UserAndOrgs(ctx context.Context) (string, []string, error) {
 	log.Printf("GitHub API: Successfully authenticated as user '%s'", user.Login)
 
 	// Get user's organizations
-	orgs, err := c.getUserOrganizations(ctx)
+	orgList, err := c.userOrganizations(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get user organizations: %w", err)
 	}
 
 	// Build list of org names
-	orgNames := make([]string, len(orgs))
-	for i, o := range orgs {
+	orgNames := make([]string, len(orgList))
+	for i, o := range orgList {
 		orgNames[i] = o.Login
 	}
 
-	log.Printf("GitHub API: User '%s' is member of %d organizations", user.Login, len(orgs))
+	log.Printf("GitHub API: User '%s' is member of %d organizations", user.Login, len(orgList))
 	return user.Login, orgNames, nil
 }
 
@@ -166,8 +166,8 @@ type Organization struct {
 	Login string `json:"login"`
 }
 
-// getUserOrganizations fetches all organizations the authenticated user is a member of.
-func (c *Client) getUserOrganizations(ctx context.Context) ([]Organization, error) {
+// userOrganizations fetches all organizations the authenticated user is a member of.
+func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) {
 	var orgs []Organization
 	var lastErr error
 
@@ -216,8 +216,8 @@ func (c *Client) getUserOrganizations(ctx context.Context) ([]Organization, erro
 
 			case http.StatusForbidden:
 				// Check if it's a rate limit issue
-				if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-					resetTime := resp.Header.Get("X-RateLimit-Reset")
+				if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
+					resetTime := resp.Header.Get("X-Ratelimit-Reset")
 					log.Printf("GitHub API rate limit hit, reset at %s", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
@@ -252,7 +252,7 @@ func (c *Client) getUserOrganizations(ctx context.Context) ([]Organization, erro
 
 // ValidateOrgMembership checks if the authenticated user has access to the specified organization.
 // Returns the authenticated user's username, list of all their organizations, and nil error if successful.
-func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (string, []string, error) {
+func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (username string, orgs []string, err error) {
 	log.Printf("GitHub API: Starting authentication and org membership validation for org '%s'", org)
 
 	// Sanitize org name

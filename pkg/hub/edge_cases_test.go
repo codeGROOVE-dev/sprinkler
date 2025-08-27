@@ -201,7 +201,8 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 					"https://github.com/用户/仓库/pull/1",
 				},
 			},
-			wantErr: false, // Currently allowed
+			wantErr: true, // Should fail - non-ASCII characters
+			errMsg:  "invalid PR URL structure",
 		},
 		{
 			name: "PR URL with spaces",
@@ -210,7 +211,8 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 					"https://github.com/my org/my repo/pull/1",
 				},
 			},
-			wantErr: false, // Spaces are actually allowed in the current parsing
+			wantErr: true, // Should fail - spaces not allowed
+			errMsg:  "invalid PR URL structure",
 		},
 		{
 			name: "PR URL with negative number",
@@ -220,7 +222,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "invalid PR URL components",
+			errMsg:  "invalid PR URL structure",
 		},
 		{
 			name: "PR URL with zero",
@@ -230,7 +232,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "invalid PR URL components",
+			errMsg:  "invalid PR URL structure",
 		},
 		{
 			name: "exactly 200 PR URLs",

@@ -19,11 +19,11 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
 
-// getGitHubToken attempts to get a GitHub token from multiple sources:
+// gitHubToken attempts to get a GitHub token from multiple sources:
 // 1. Command-line flag
 // 2. GITHUB_TOKEN environment variable
 // 3. gh auth token command.
-func getGitHubToken(flagToken string) (string, error) {
+func gitHubToken(flagToken string) (string, error) {
 	// First try flag
 	if flagToken != "" {
 		return flagToken, nil
@@ -99,7 +99,7 @@ func run() error {
 	}
 
 	// Get token from various sources
-	githubToken, err := getGitHubToken(*token)
+	githubToken, err := gitHubToken(*token)
 	if err != nil {
 		return err
 	}
@@ -127,15 +127,15 @@ func run() error {
 
 	// Create client configuration
 	config := client.Config{
-		ServerURL:    url,
-		Organization: *org,
-		Token:        githubToken,
-		EventTypes:   eventTypesList,
-		PullRequests: prList,
+		ServerURL:      url,
+		Organization:   *org,
+		Token:          githubToken,
+		EventTypes:     eventTypesList,
+		PullRequests:   prList,
 		UserEventsOnly: *userEvents,
-		Verbose:      *verbose,
-		NoReconnect:  *noReconnect,
-		MaxRetries:   *maxRetries,
+		Verbose:        *verbose,
+		NoReconnect:    *noReconnect,
+		MaxRetries:     *maxRetries,
 		OnEvent: func(event client.Event) {
 			// Custom event handling for the CLI
 			if *outputJSON {

@@ -126,9 +126,32 @@ func parsePRUrl(prURL string) (owner, repo string, prNumber int, err error) {
 	owner = parts[0]
 	repo = parts[1]
 
+	// Validate owner and repo don't contain dangerous characters
+	if owner == "" || repo == "" {
+		return "", "", 0, errors.New("empty owner or repo")
+	}
+
+	// GitHub usernames/orgs and repo names can only contain alphanumeric, dash, underscore, and dot
+	for _, c := range owner {
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
+		if !valid {
+			return "", "", 0, errors.New("invalid owner name")
+		}
+	}
+	for _, c := range repo {
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
+		if !valid {
+			return "", "", 0, errors.New("invalid repo name")
+		}
+	}
+
 	// Parse PR number
 	var num int
 	if _, err := fmt.Sscanf(parts[3], "%d", &num); err != nil {
+		return "", "", 0, errors.New("invalid PR number")
+	}
+
+	if num <= 0 {
 		return "", "", 0, errors.New("invalid PR number")
 	}
 
@@ -137,6 +160,8 @@ func parsePRUrl(prURL string) (owner, repo string, prNumber int, err error) {
 
 // matches determines if an event matches a client's subscription.
 // userOrgs contains the lowercase organization names the user is a member of.
+//
+//nolint:gocognit // This function implements complex matching logic that cannot be simplified without losing clarity
 func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
 	// Check if event type matches subscription
 	if len(sub.EventTypes) > 0 {
