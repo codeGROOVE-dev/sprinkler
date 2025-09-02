@@ -40,10 +40,9 @@ var (
 	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
 	allowedEvents = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"),
 		"Comma-separated list of allowed webhook event types (use '*' for all)")
-	allowedOrigins = flag.String("allowed-origins", os.Getenv("ALLOWED_ORIGINS"),
-		"Comma-separated list of allowed CORS origins (leave empty to disable CORS)")
 )
 
+//nolint:funlen,lll // Main function orchestrates entire server setup and cannot be split without losing clarity
 func main() {
 	flag.Parse()
 
@@ -71,17 +70,7 @@ func main() {
 		log.Printf("Allowing webhook event types: %v", allowedEventTypes)
 	}
 
-	// Parse allowed origins for CORS
-	var corsOrigins []string
-	if *allowedOrigins != "" {
-		corsOrigins = strings.Split(*allowedOrigins, ",")
-		for i := range corsOrigins {
-			corsOrigins[i] = strings.TrimSpace(corsOrigins[i])
-		}
-		log.Printf("Allowing CORS origins: %v", corsOrigins)
-	} else {
-		log.Println("CORS disabled - no origins allowed")
-	}
+	// CORS support removed - WebSocket clients should handle auth via Authorization header
 
 	// Create context for the application
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,34 +85,118 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Health check endpoint
+	// Health check endpoint - exact match only
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Request to %s from %s", r.URL.Path, r.RemoteAddr)
+		ip := security.ClientIP(r)
+
+		// Only respond OK to exact root path
 		if r.URL.Path == "/" {
+			// Don't log health checks to reduce noise
+			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
 			if _, err := w.Write([]byte("webhook-sprinkler is running\n")); err != nil {
-				log.Printf("failed to write response: %v", err)
+				log.Printf("failed to write health check response: %v", err)
 			}
 			return
 		}
+		// Return 404 for any other path
+		log.Printf("404 Not Found: path=%s ip=%s", r.URL.Path, ip)
 		http.NotFound(w, r)
 	})
 	log.Println("Registered health check handler at /")
 
+	// Webhook handler - exact match
 	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes)
-	mux.Handle("/webhook", webhookHandler)
+	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
+		ip := security.ClientIP(r)
+		startTime := time.Now()
+
+		// Log request
+		log.Printf("Webhook request: path=%s ip=%s method=%s", r.URL.Path, ip, r.Method)
+
+		// Exact path match only
+		if r.URL.Path != "/webhook" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Rate limiting
+		if !rateLimiter.Allow(ip) {
+			log.Printf("Webhook 429: rate limit exceeded ip=%s", ip)
+			w.WriteHeader(http.StatusTooManyRequests)
+			if _, err := w.Write([]byte("429 Too Many Requests: Rate limit exceeded\n")); err != nil {
+				log.Printf("failed to write 429 response: %v", err)
+			}
+			return
+		}
+
+		webhookHandler.ServeHTTP(w, r)
+		log.Printf("Webhook complete: ip=%s duration=%v", ip, time.Since(startTime))
+	})
 	log.Println("Registered webhook handler at /webhook")
 
+	// WebSocket handler - exact match
 	wsHandler := hub.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
-	mux.Handle("/ws", websocket.Handler(wsHandler.Handle))
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+		ip := security.ClientIP(r)
+
+		// Log request start
+		log.Printf("WebSocket request START: path=%s ip=%s user_agent=%s",
+			r.URL.Path, ip, r.UserAgent())
+
+		// Exact path match only
+		if r.URL.Path != "/ws" {
+			log.Printf("WebSocket 404: wrong path=%s ip=%s", r.URL.Path, ip)
+			http.NotFound(w, r)
+			return
+		}
+
+		// Rate limiting check
+		if !rateLimiter.Allow(ip) {
+			log.Printf("WebSocket 429: rate limit exceeded ip=%s", ip)
+			w.WriteHeader(http.StatusTooManyRequests)
+			if _, err := w.Write([]byte("429 Too Many Requests: Rate limit exceeded\n")); err != nil {
+				log.Printf("failed to write 429 response: %v", err)
+			}
+			return
+		}
+
+		// Pre-validate authentication before WebSocket upgrade
+		authHeader := r.Header.Get("Authorization")
+		if !wsHandler.PreValidateAuth(r) {
+			log.Printf("WebSocket 403: auth failed ip=%s auth_header=%q", ip, authHeader)
+			w.WriteHeader(http.StatusForbidden)
+			msg := "403 Forbidden: Invalid or missing GitHub token. " +
+				"Please provide a valid token in the Authorization header as 'Bearer <token>'\n"
+			if _, err := w.Write([]byte(msg)); err != nil {
+				log.Printf("failed to write 403 response: %v", err)
+			}
+			return
+		}
+
+		// Check connection limit before upgrade
+		if !connLimiter.CanAdd(ip) {
+			log.Printf("WebSocket 429: connection limit ip=%s", ip)
+			w.WriteHeader(http.StatusTooManyRequests)
+			if _, err := w.Write([]byte("429 Too Many Requests: Connection limit exceeded\n")); err != nil {
+				log.Printf("failed to write 429 response: %v", err)
+			}
+			return
+		}
+
+		// Log successful auth and proceed to upgrade
+		log.Printf("WebSocket UPGRADE: ip=%s duration=%v", ip, time.Since(startTime))
+
+		// Use the websocket.Handler to upgrade the connection
+		websocket.Handler(wsHandler.Handle).ServeHTTP(w, r)
+	})
 	log.Println("Registered WebSocket handler at /ws")
 
-	// Apply combined middleware with allowed origins
-	handler := security.CombinedMiddleware(rateLimiter, corsOrigins)(mux)
-
+	// No middleware - handle rate limiting inline for better control
 	server := &http.Server{
 		Addr:           *addr,
-		Handler:        handler,
+		Handler:        mux,
 		ReadTimeout:    readTimeout,
 		WriteTimeout:   writeTimeout,
 		IdleTimeout:    idleTimeout,

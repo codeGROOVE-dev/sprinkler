@@ -1,7 +1,9 @@
 package security
 
 import (
+	"bufio"
 	"log"
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -120,4 +122,13 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 		rw.written = true
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Hijack implements the http.Hijacker interface to support WebSocket upgrades.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
 }

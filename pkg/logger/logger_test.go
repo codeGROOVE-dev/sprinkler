@@ -191,7 +191,7 @@ func TestLargeNumberOfFields(t *testing.T) {
 	defer log.SetOutput(nil)
 
 	fields := make(Fields, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		fields[fmt.Sprintf("field%03d", i)] = i
 	}
 

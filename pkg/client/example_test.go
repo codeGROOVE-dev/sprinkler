@@ -37,7 +37,8 @@ func ExampleClient() {
 	// Create the client
 	c, err := client.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 
 	// Create a context with timeout
@@ -59,7 +60,8 @@ func ExampleClient_gracefulShutdown() {
 
 	c, err := client.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 
 	// Start client in goroutine
@@ -112,7 +114,8 @@ func ExampleClient_customLogger() {
 
 	c, err := client.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 
 	// Alternative: use the JSON logger
@@ -120,7 +123,8 @@ func ExampleClient_customLogger() {
 		config.Logger = jsonLogger
 		c2, err := client.New(config)
 		if err != nil {
-			log.Fatal(err)
+			log.Print(err)
+			return
 		}
 		_ = c2
 	}
@@ -129,7 +133,8 @@ func ExampleClient_customLogger() {
 	config.Logger = structuredLogger
 	c3, err := client.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 
 	_ = c

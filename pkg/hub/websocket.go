@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -74,6 +75,31 @@ func NewWebSocketHandlerForTest(h *Hub, connLimiter *security.ConnectionLimiter,
 	return handler
 }
 
+// PreValidateAuth checks if the request has a valid GitHub token before WebSocket upgrade.
+// This allows us to return proper HTTP status codes before the connection is upgraded.
+func (h *WebSocketHandler) PreValidateAuth(r *http.Request) bool {
+	if h.testMode {
+		return true
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return false
+	}
+
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return false
+	}
+
+	githubToken := strings.TrimPrefix(authHeader, bearerPrefix)
+	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
+		return false
+	}
+
+	return true
+}
+
 // extractGitHubToken extracts and validates the GitHub token from the request.
 func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (string, bool) {
 	if h.testMode {
@@ -105,8 +131,8 @@ func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (st
 	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
 		// Log token details for debugging without revealing the full token
 		tokenPrefix := ""
-		if len(githubToken) >= 4 {
-			tokenPrefix = githubToken[:4]
+		if len(githubToken) >= tokenPrefixLength {
+			tokenPrefix = githubToken[:tokenPrefixLength]
 		}
 		logger.Warn("WebSocket authentication failed: invalid GitHub token format", logger.Fields{
 			"ip":           ip,
@@ -171,6 +197,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	ghClient := github.NewClient(githubToken)
 
 	// If organization is specified, validate membership
+	//nolint:nestif // Complex org validation logic requires nested checks for different scenarios
 	if sub.Organization != "" {
 		// Handle wildcard organization - user wants to subscribe to all their orgs
 		if sub.Organization == "*" {
@@ -182,8 +209,8 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 			if err != nil {
 				// Log token details for debugging
 				tokenPrefix := ""
-				if len(githubToken) >= 4 {
-					tokenPrefix = githubToken[:4]
+				if len(githubToken) >= tokenPrefixLength {
+					tokenPrefix = githubToken[:tokenPrefixLength]
 				}
 				logger.Error("GitHub auth failed for wildcard org subscription", err, logger.Fields{
 					"ip":           ip,
@@ -234,8 +261,8 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 		if err != nil {
 			// Log token details for debugging
 			tokenPrefix := ""
-			if len(githubToken) >= 4 {
-				tokenPrefix = githubToken[:4]
+			if len(githubToken) >= tokenPrefixLength {
+				tokenPrefix = githubToken[:tokenPrefixLength]
 			}
 			logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
 				"ip":           ip,
@@ -287,8 +314,8 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	if err != nil {
 		// Log token details for debugging
 		tokenPrefix := ""
-		if len(githubToken) >= 4 {
-			tokenPrefix = githubToken[:4]
+		if len(githubToken) >= tokenPrefixLength {
+			tokenPrefix = githubToken[:tokenPrefixLength]
 		}
 		logger.Error("GitHub auth failed (no specific org)", err, logger.Fields{
 			"ip":           ip,
@@ -330,6 +357,8 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 }
 
 // Handle handles a WebSocket connection.
+//
+//nolint:funlen,gocyclo // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
 func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Use the request's context for proper lifecycle management
 	ctx, cancel := context.WithCancel(ws.Request().Context())

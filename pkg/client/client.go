@@ -41,25 +41,26 @@ type Event struct {
 
 // Config holds the configuration for the client.
 type Config struct {
-	OnConnect      func()
+	Logger         *slog.Logger
 	OnDisconnect   func(error)
 	OnEvent        func(Event)
+	OnConnect      func()
 	ServerURL      string
 	Token          string
 	Organization   string
 	EventTypes     []string
-	PullRequests   []string // List of PR URLs to subscribe to
+	PullRequests   []string
 	MaxBackoff     time.Duration
 	PingInterval   time.Duration
 	MaxRetries     int
 	UserEventsOnly bool
 	Verbose        bool
 	NoReconnect    bool
-	Logger         *slog.Logger // Optional logger, defaults to text handler on stderr
 }
 
 // Client represents a WebSocket client with automatic reconnection.
 type Client struct {
+	logger     *slog.Logger
 	ws         *websocket.Conn
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
@@ -67,7 +68,6 @@ type Client struct {
 	eventCount int
 	retries    int
 	mu         sync.RWMutex
-	logger     *slog.Logger
 }
 
 // New creates a new robust WebSocket client.

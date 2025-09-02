@@ -202,19 +202,19 @@ func TestParsePRURLSecurity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			owner, repo, num, err := parsePRUrl(tt.prURL)
+			info, err := parsePRUrl(tt.prURL)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parsePRUrl() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if !tt.wantErr {
-				if owner != tt.wantOwner {
-					t.Errorf("parsePRUrl() owner = %v, want %v", owner, tt.wantOwner)
+				if info.owner != tt.wantOwner {
+					t.Errorf("parsePRUrl() owner = %v, want %v", info.owner, tt.wantOwner)
 				}
-				if repo != tt.wantRepo {
-					t.Errorf("parsePRUrl() repo = %v, want %v", repo, tt.wantRepo)
+				if info.repo != tt.wantRepo {
+					t.Errorf("parsePRUrl() repo = %v, want %v", info.repo, tt.wantRepo)
 				}
-				if num != tt.wantNum {
-					t.Errorf("parsePRUrl() num = %v, want %v", num, tt.wantNum)
+				if info.prNumber != tt.wantNum {
+					t.Errorf("parsePRUrl() num = %v, want %v", info.prNumber, tt.wantNum)
 				}
 			}
 		})
@@ -243,7 +243,7 @@ func TestMatchesSecurityEdgeCases(t *testing.T) {
 				// Note: Go maps can't have true circular references, but we can test deep nesting
 				deep := make(map[string]any)
 				current := deep
-				for i := 0; i < 100; i++ {
+				for range 100 {
 					next := make(map[string]any)
 					current["nested"] = next
 					current = next
@@ -375,7 +375,7 @@ func TestClientIDGeneration(t *testing.T) {
 	const numIDs = 10000
 
 	// Simulate ID generation (in real code this is in websocket.go)
-	for i := 0; i < numIDs; i++ {
+	for i := range numIDs {
 		// Generate a simple ID for testing uniqueness concept
 		// Real implementation uses crypto/rand
 		id := fmt.Sprintf("test-id-%d-%d", i, i*31337)

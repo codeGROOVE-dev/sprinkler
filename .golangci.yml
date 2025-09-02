@@ -175,7 +175,7 @@ linters:
           exclude: [""]
           arguments:
             - max-lit-count: "5"
-              allow-strs: '"","\n"'
+              allow-strs: '"","\n","error","type","message"'
               allow-ints: "0,1,2,3,24,30,60,100,365,0o600,0o700,0o750,0o755"
               allow-floats: "0.0,0.,1.0,1.,2.0,2."
         - name: cognitive-complexity
