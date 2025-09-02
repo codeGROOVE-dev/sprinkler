@@ -373,7 +373,8 @@ func (c *Client) connect(ctx context.Context) error {
 	return c.readEvents(ctx, ws)
 }
 
-// sendPings sends periodic ping/pong messages to keep the connection alive.
+// sendPings sends periodic ping messages to keep the connection alive.
+// The server will respond with pings too, and we respond with pongs in readEvents.
 func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 	ticker := time.NewTicker(c.config.PingInterval)
 	defer ticker.Stop()
@@ -383,14 +384,14 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pong := map[string]string{msgTypeField: "pong"}
-			c.logger.Debug("[KEEP-ALIVE] Sending periodic pong to maintain connection")
-			if err := websocket.JSON.Send(ws, pong); err != nil {
-				c.logger.Error("Failed to send keep-alive pong", "error", err)
+			ping := map[string]string{msgTypeField: "ping", "timestamp": time.Now().Format(time.RFC3339)}
+			c.logger.Debug("[KEEP-ALIVE] Sending periodic ping to server")
+			if err := websocket.JSON.Send(ws, ping); err != nil {
+				c.logger.Error("Failed to send keep-alive ping", "error", err)
 				c.logger.Warn("Connection may be broken!")
 				return
 			}
-			c.logger.Debug("[KEEP-ALIVE] ✓ Pong sent successfully")
+			c.logger.Debug("[KEEP-ALIVE] ✓ Ping sent successfully")
 		}
 	}
 }
@@ -422,12 +423,16 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		// Handle ping messages
 		if responseType == "ping" {
 			c.logger.Debug("[PING-PONG] Received PING from server")
-			pong := map[string]string{msgTypeField: "pong"}
+			pong := map[string]any{msgTypeField: "pong"}
+			// Echo back any sequence number if present
+			if seq, ok := response["seq"]; ok {
+				pong["seq"] = seq
+			}
 			if err := websocket.JSON.Send(ws, pong); err != nil {
 				c.logger.Error("[PING-PONG] Failed to send PONG response", "error", err)
 				return fmt.Errorf("error sending pong response: %w", err)
 			}
-			c.logger.Debug("[PING-PONG] Sent PONG response to server")
+			c.logger.Debug("[PING-PONG] Sent PONG response to server", "seq", pong["seq"])
 			continue
 		}
 

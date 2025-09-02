@@ -273,12 +273,12 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []string, err error) {
 	// Detect token type for better debugging
 	const legacyTokenLength = 40
-	tokenType := "unknown"
+	var tokenType string
 	switch {
 	case strings.HasPrefix(c.token, "ghp_"):
 		tokenType = "personal_access_token"
 	case strings.HasPrefix(c.token, "gho_"):
-		tokenType = "oauth_token"  
+		tokenType = "oauth_token" // #nosec G101 - not a credential, just a type identifier
 	case strings.HasPrefix(c.token, "ghs_"):
 		tokenType = "server_to_server" // #nosec G101 - not a credential, just a type identifier
 	case len(c.token) == legacyTokenLength:
