@@ -92,7 +92,7 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 
 			case http.StatusUnauthorized:
 				// Don't retry on auth failures
-				log.Printf("GitHub API: 401 Unauthorized - invalid token for /user endpoint")
+				log.Print("GitHub API: 401 Unauthorized - invalid token for /user endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
@@ -108,7 +108,8 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 				if len(c.token) >= 4 {
 					tokenPrefix = c.token[:4]
 				}
-				log.Printf("GitHub API: 403 Forbidden - access denied for /user endpoint (token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
+				log.Printf("GitHub API: 403 Forbidden - access denied for /user endpoint "+
+					"(token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
@@ -219,7 +220,7 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 				return nil
 
 			case http.StatusUnauthorized:
-				log.Printf("GitHub API: 401 Unauthorized - invalid token for /user/orgs endpoint")
+				log.Print("GitHub API: 401 Unauthorized - invalid token for /user/orgs endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
@@ -235,7 +236,8 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 				if len(c.token) >= 4 {
 					tokenPrefix = c.token[:4]
 				}
-				log.Printf("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint (token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
+				log.Printf("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint "+
+					"(token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:

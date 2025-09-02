@@ -101,7 +101,7 @@ func TestWildcardOrganizationEdgeCases(t *testing.T) {
 			eventOrg: "org500",
 			userOrgs: func() map[string]bool {
 				orgs := make(map[string]bool, 1000)
-				for i := 0; i < 1000; i++ {
+				for i := range 1000 {
 					orgs[fmt.Sprintf("org%d", i)] = true
 				}
 				return orgs
@@ -198,7 +198,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 			name: "PR URL with unicode characters",
 			sub: Subscription{
 				PullRequests: []string{
-					"https://github.com/用户/仓库/pull/1",
+					"https://github.com/用户/仓库/pull/1", //nolint:gosmopolitan // Testing Unicode rejection
 				},
 			},
 			wantErr: true, // Should fail - non-ASCII characters
@@ -239,7 +239,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 			sub: Subscription{
 				PullRequests: func() []string {
 					urls := make([]string, 200)
-					for i := 0; i < 200; i++ {
+					for i := range 200 {
 						urls[i] = fmt.Sprintf("https://github.com/org/repo/pull/%d", i+1)
 					}
 					return urls
@@ -252,7 +252,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 			sub: Subscription{
 				PullRequests: func() []string {
 					urls := make([]string, 201)
-					for i := 0; i < 201; i++ {
+					for i := range 201 {
 						urls[i] = fmt.Sprintf("https://github.com/org/repo/pull/%d", i+1)
 					}
 					return urls
@@ -280,7 +280,7 @@ func TestPRURLValidationEdgeCases(t *testing.T) {
 func TestOrganizationLimitEdgeCases(t *testing.T) {
 	// Create a list of 1500 orgs
 	manyOrgs := make([]string, 1500)
-	for i := 0; i < 1500; i++ {
+	for i := range 1500 {
 		manyOrgs[i] = fmt.Sprintf("org%d", i)
 	}
 
@@ -298,7 +298,7 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 	}
 
 	// Verify the first 1000 are present
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		orgName := fmt.Sprintf("org%d", i)
 		if !client.userOrgs[orgName] {
 			t.Errorf("Expected org %s to be present", orgName)
@@ -318,7 +318,7 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 func TestConcurrentMapAccess(t *testing.T) {
 	hub := NewHub()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		client := NewClient(
 			fmt.Sprintf("client%d", i),
 			Subscription{
@@ -334,7 +334,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 
 	// Simulate concurrent event broadcasts
 	done := make(chan bool)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		go func(index int) {
 			event := Event{
 				Type: "pull_request",
@@ -357,7 +357,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		<-done
 	}
 }
@@ -367,7 +367,7 @@ func TestChannelBufferOverflow(t *testing.T) {
 	hub := NewHub()
 
 	// Fill the broadcast channel to capacity
-	for i := 0; i < broadcastBufferSize; i++ {
+	for i := range broadcastBufferSize {
 		msg := broadcastMsg{
 			event:   Event{Type: "test"},
 			payload: map[string]any{},

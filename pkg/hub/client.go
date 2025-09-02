@@ -16,9 +16,9 @@ type Client struct {
 	send         chan Event
 	hub          *Hub
 	done         chan struct{}
+	userOrgs     map[string]bool
 	ID           string
 	subscription Subscription
-	userOrgs     map[string]bool // Set of organizations the user is a member of (lowercase)
 	closeOnce    sync.Once
 }
 

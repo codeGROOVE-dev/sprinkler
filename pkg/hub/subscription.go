@@ -12,6 +12,8 @@ const (
 	maxEventTypeLength    = 50  // Max length of individual event type
 	maxPRsPerSubscription = 200 // Maximum number of PRs to subscribe to
 	maxPRURLLength        = 500 // Maximum length of a PR URL
+	minPRURLParts         = 4   // Minimum parts in PR URL (owner/repo/pull/number)
+	tokenPrefixLength     = 4   // Length of token prefix for logging
 )
 
 var (
@@ -26,8 +28,8 @@ type Subscription struct {
 	Organization   string   `json:"organization"`
 	Username       string   `json:"-"`
 	EventTypes     []string `json:"event_types,omitempty"`
+	PullRequests   []string `json:"pull_requests,omitempty"`
 	UserEventsOnly bool     `json:"user_events_only,omitempty"`
-	PullRequests   []string `json:"pull_requests,omitempty"` // List of PR URLs to subscribe to
 }
 
 // Validate performs security validation on subscription data.
@@ -97,11 +99,11 @@ func (s *Subscription) Validate() error {
 			}
 
 			// Validate the URL can be parsed to prevent injection
-			owner, repo, prNum, err := parsePRUrl(prURL)
+			info, err := parsePRUrl(prURL)
 			if err != nil {
 				return errors.New("invalid PR URL structure")
 			}
-			if owner == "" || repo == "" || prNum <= 0 {
+			if info.owner == "" || info.repo == "" || info.prNumber <= 0 {
 				return errors.New("invalid PR URL components")
 			}
 		}
@@ -110,8 +112,15 @@ func (s *Subscription) Validate() error {
 	return nil
 }
 
+// prURLInfo holds parsed PR URL components.
+type prURLInfo struct {
+	owner    string
+	repo     string
+	prNumber int
+}
+
 // parsePRUrl extracts owner, repo, and PR number from a GitHub PR URL.
-func parsePRUrl(prURL string) (owner, repo string, prNumber int, err error) {
+func parsePRUrl(prURL string) (*prURLInfo, error) {
 	// Remove protocol
 	url := strings.TrimPrefix(prURL, "https://")
 	url = strings.TrimPrefix(url, "http://")
@@ -119,49 +128,53 @@ func parsePRUrl(prURL string) (owner, repo string, prNumber int, err error) {
 
 	// Split by /
 	parts := strings.Split(url, "/")
-	if len(parts) < 4 || parts[2] != "pull" {
-		return "", "", 0, errors.New("invalid PR URL format")
+	if len(parts) < minPRURLParts || parts[2] != "pull" {
+		return nil, errors.New("invalid PR URL format")
 	}
 
-	owner = parts[0]
-	repo = parts[1]
+	owner := parts[0]
+	repo := parts[1]
 
 	// Validate owner and repo don't contain dangerous characters
 	if owner == "" || repo == "" {
-		return "", "", 0, errors.New("empty owner or repo")
+		return nil, errors.New("empty owner or repo")
 	}
 
 	// GitHub usernames/orgs and repo names can only contain alphanumeric, dash, underscore, and dot
 	for _, c := range owner {
 		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
 		if !valid {
-			return "", "", 0, errors.New("invalid owner name")
+			return nil, errors.New("invalid owner name")
 		}
 	}
 	for _, c := range repo {
 		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
 		if !valid {
-			return "", "", 0, errors.New("invalid repo name")
+			return nil, errors.New("invalid repo name")
 		}
 	}
 
 	// Parse PR number
 	var num int
 	if _, err := fmt.Sscanf(parts[3], "%d", &num); err != nil {
-		return "", "", 0, errors.New("invalid PR number")
+		return nil, errors.New("invalid PR number")
 	}
 
 	if num <= 0 {
-		return "", "", 0, errors.New("invalid PR number")
+		return nil, errors.New("invalid PR number")
 	}
 
-	return owner, repo, num, nil
+	return &prURLInfo{
+		owner:    owner,
+		repo:     repo,
+		prNumber: num,
+	}, nil
 }
 
 // matches determines if an event matches a client's subscription.
 // userOrgs contains the lowercase organization names the user is a member of.
 //
-//nolint:gocognit // This function implements complex matching logic that cannot be simplified without losing clarity
+//nolint:gocognit,gocyclo // This function implements complex matching logic that cannot be simplified without losing clarity
 func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
 	// Check if event type matches subscription
 	if len(sub.EventTypes) > 0 {
@@ -199,6 +212,7 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 	}
 
 	// Check if this is a PR subscription (no org required)
+	//nolint:nestif // Complex PR matching logic requires nested checks
 	if len(sub.PullRequests) > 0 {
 		// For PR subscriptions, check if this event is about one of the subscribed PRs
 		// and the user is a member of the organization
@@ -227,15 +241,15 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 
 			// Check if this PR matches any of the subscribed PRs
 			for _, prURL := range sub.PullRequests {
-				owner, repo, num, err := parsePRUrl(prURL)
+				info, err := parsePRUrl(prURL)
 				if err != nil {
 					continue
 				}
 
 				// Check if this matches the event
-				if strings.EqualFold(owner, eventOrg) &&
-					strings.EqualFold(repo, repoName) &&
-					int(prNumber) == num {
+				if strings.EqualFold(info.owner, eventOrg) &&
+					strings.EqualFold(info.repo, repoName) &&
+					int(prNumber) == info.prNumber {
 					return true
 				}
 			}

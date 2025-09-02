@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+//nolint:maintidx // Test function with comprehensive test cases
 func TestMatches(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -486,20 +487,20 @@ func TestParsePRUrl(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			owner, repo, num, err := parsePRUrl(tt.url)
+			info, err := parsePRUrl(tt.url)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parsePRUrl() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr {
-				if owner != tt.wantOwner {
-					t.Errorf("parsePRUrl() owner = %v, want %v", owner, tt.wantOwner)
+				if info.owner != tt.wantOwner {
+					t.Errorf("parsePRUrl() owner = %v, want %v", info.owner, tt.wantOwner)
 				}
-				if repo != tt.wantRepo {
-					t.Errorf("parsePRUrl() repo = %v, want %v", repo, tt.wantRepo)
+				if info.repo != tt.wantRepo {
+					t.Errorf("parsePRUrl() repo = %v, want %v", info.repo, tt.wantRepo)
 				}
-				if num != tt.wantNum {
-					t.Errorf("parsePRUrl() num = %v, want %v", num, tt.wantNum)
+				if info.prNumber != tt.wantNum {
+					t.Errorf("parsePRUrl() num = %v, want %v", info.prNumber, tt.wantNum)
 				}
 			}
 		})

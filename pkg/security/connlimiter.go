@@ -44,6 +44,37 @@ func NewConnectionLimiter(maxPerIP, maxTotal int) *ConnectionLimiter {
 	return cl
 }
 
+// CanAdd checks if a connection can be added for the given IP without actually adding it.
+func (cl *ConnectionLimiter) CanAdd(ip string) bool {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+
+	if cl.total >= cl.maxTotal {
+		return false
+	}
+
+	if info := cl.perIP[ip]; info != nil && info.count >= cl.maxPerIP {
+		return false
+	}
+
+	// Check if we would hit the IP entry limit
+	if _, exists := cl.perIP[ip]; !exists && len(cl.perIP) >= maxIPEntries {
+		// Would need to evict, but might not be able to
+		hasInactive := false
+		for _, info := range cl.perIP {
+			if info.count == 0 {
+				hasInactive = true
+				break
+			}
+		}
+		if !hasInactive {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Add attempts to add a connection for the given IP.
 func (cl *ConnectionLimiter) Add(ip string) bool {
 	cl.mu.Lock()
