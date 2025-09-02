@@ -40,6 +40,7 @@ var (
 	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
 	allowedEvents = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"),
 		"Comma-separated list of allowed webhook event types (use '*' for all)")
+	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
 )
 
 //nolint:funlen,lll // Main function orchestrates entire server setup and cannot be split without losing clarity
@@ -145,6 +146,26 @@ func main() {
 		log.Printf("WebSocket request START: path=%s ip=%s user_agent=%s",
 			r.URL.Path, ip, r.UserAgent())
 
+		// Only log headers if debug flag is set
+		if *debugHeaders {
+			log.Print("DEBUG: Headers logging enabled (security warning)")
+			for name, values := range r.Header {
+				for _, value := range values {
+					// Mask sensitive headers even in debug mode
+					switch strings.ToLower(name) {
+					case "authorization", "x-hub-signature-256", "cookie", "x-api-key":
+						if len(value) > 10 {
+							log.Printf("WebSocket header: %s: [REDACTED len=%d]", name, len(value))
+						} else {
+							log.Printf("WebSocket header: %s: [REDACTED]", name)
+						}
+					default:
+						log.Printf("WebSocket header: %s: %s", name, value)
+					}
+				}
+			}
+		}
+
 		// Exact path match only
 		if r.URL.Path != "/ws" {
 			log.Printf("WebSocket 404: wrong path=%s ip=%s", r.URL.Path, ip)
@@ -188,8 +209,15 @@ func main() {
 		// Log successful auth and proceed to upgrade
 		log.Printf("WebSocket UPGRADE: ip=%s duration=%v", ip, time.Since(startTime))
 
-		// Use the websocket.Handler to upgrade the connection
-		websocket.Handler(wsHandler.Handle).ServeHTTP(w, r)
+		// Use websocket.Server to allow non-browser clients (no Origin header check)
+		s := websocket.Server{
+			Handler: wsHandler.Handle,
+			Handshake: func(_ *websocket.Config, _ *http.Request) error {
+				// Accept all connections - we do our own auth
+				return nil
+			},
+		}
+		s.ServeHTTP(w, r)
 	})
 	log.Println("Registered WebSocket handler at /ws")
 

@@ -171,92 +171,99 @@ func parsePRUrl(prURL string) (*prURLInfo, error) {
 	}, nil
 }
 
-// matches determines if an event matches a client's subscription.
-// userOrgs contains the lowercase organization names the user is a member of.
-//
-//nolint:gocognit,gocyclo // This function implements complex matching logic that cannot be simplified without losing clarity
-func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
-	// Check if event type matches subscription
-	if len(sub.EventTypes) > 0 {
-		eventTypeMatches := false
-		for _, allowedType := range sub.EventTypes {
-			if event.Type == allowedType {
-				eventTypeMatches = true
-				break
-			}
-		}
-		if !eventTypeMatches {
-			return false
+// Helper functions to reduce cognitive complexity.
+
+func matchesEventType(sub Subscription, eventType string) bool {
+	if len(sub.EventTypes) == 0 {
+		return true // No filter means all events
+	}
+	for _, allowedType := range sub.EventTypes {
+		if eventType == allowedType {
+			return true
 		}
 	}
+	return false
+}
 
-	// Extract the organization from the event
-	eventOrg := ""
-
-	// Check repository owner
+func extractEventOrg(payload map[string]any) string {
+	// Check repository owner first
 	if repo, ok := payload["repository"].(map[string]any); ok {
 		if owner, ok := repo["owner"].(map[string]any); ok {
 			if login, ok := owner["login"].(string); ok {
-				eventOrg = login
+				return login
 			}
+		}
+	}
+	// Check organization field directly (some events include it)
+	if org, ok := payload["organization"].(map[string]any); ok {
+		if login, ok := org["login"].(string); ok {
+			return login
+		}
+	}
+	return ""
+}
+
+func matchesPRSubscription(sub Subscription, payload map[string]any, eventOrg string, userOrgs map[string]bool) bool {
+	// For PR subscriptions, check if this event is about one of the subscribed PRs
+	// and the user is a member of the organization
+
+	// Only check org membership if we have an eventOrg
+	if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
+		// User is not a member of this org, don't deliver the event
+		return false
+	}
+
+	// Extract PR information from the event
+	pr, ok := payload["pull_request"].(map[string]any)
+	if !ok {
+		return false
+	}
+
+	// Get PR number
+	prNumber, ok := pr["number"].(float64)
+	if !ok {
+		return false
+	}
+
+	// Get repository info
+	repoName := ""
+	if repo, ok := payload["repository"].(map[string]any); ok {
+		if name, ok := repo["name"].(string); ok {
+			repoName = name
 		}
 	}
 
-	// Also check organization field directly (some events include it)
-	if eventOrg == "" {
-		if org, ok := payload["organization"].(map[string]any); ok {
-			if login, ok := org["login"].(string); ok {
-				eventOrg = login
-			}
+	// Check if this PR matches any of the subscribed PRs
+	for _, prURL := range sub.PullRequests {
+		info, err := parsePRUrl(prURL)
+		if err != nil {
+			continue
+		}
+
+		// Check if this matches the event
+		if strings.EqualFold(info.owner, eventOrg) &&
+			strings.EqualFold(info.repo, repoName) &&
+			int(prNumber) == info.prNumber {
+			return true
 		}
 	}
+
+	// Not one of the subscribed PRs
+	return false
+}
+
+func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
+	// Check if event type matches subscription
+	if !matchesEventType(sub, event.Type) {
+		return false
+	}
+
+	// Extract the organization from the event
+	eventOrg := extractEventOrg(payload)
 
 	// Check if this is a PR subscription (no org required)
-	//nolint:nestif // Complex PR matching logic requires nested checks
 	if len(sub.PullRequests) > 0 {
-		// For PR subscriptions, check if this event is about one of the subscribed PRs
-		// and the user is a member of the organization
-
-		// Only check org membership if we have an eventOrg
-		if eventOrg != "" && !userOrgs[strings.ToLower(eventOrg)] {
-			// User is not a member of this org, don't deliver the event
-			return false
-		}
-
-		// Extract PR information from the event
-		if pr, ok := payload["pull_request"].(map[string]any); ok {
-			// Get PR number
-			prNumber, ok := pr["number"].(float64)
-			if !ok {
-				return false
-			}
-
-			// Get repository info
-			repoName := ""
-			if repo, ok := payload["repository"].(map[string]any); ok {
-				if name, ok := repo["name"].(string); ok {
-					repoName = name
-				}
-			}
-
-			// Check if this PR matches any of the subscribed PRs
-			for _, prURL := range sub.PullRequests {
-				info, err := parsePRUrl(prURL)
-				if err != nil {
-					continue
-				}
-
-				// Check if this matches the event
-				if strings.EqualFold(info.owner, eventOrg) &&
-					strings.EqualFold(info.repo, repoName) &&
-					int(prNumber) == info.prNumber {
-					return true
-				}
-			}
-		}
-
-		// Not a PR event or not one of the subscribed PRs
-		return false
+		return matchesPRSubscription(sub, payload, eventOrg, userOrgs)
 	}
 
 	// For UserEventsOnly mode (no org required if subscribing to user's events across all orgs)

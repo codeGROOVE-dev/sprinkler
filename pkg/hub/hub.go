@@ -161,8 +161,25 @@ func (h *Hub) cleanup() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	log.Printf("Hub cleanup: closing %d client connections gracefully", len(h.clients))
+
+	for id, client := range h.clients {
+		// Try to send shutdown message (non-blocking)
+		select {
+		case client.send <- Event{Type: "shutdown"}:
+			log.Printf("Sent shutdown notice to client %s", id)
+		default:
+			log.Printf("Could not send shutdown notice to client %s (channel full)", id)
+		}
+	}
+
+	// Give clients a moment to receive the message
+	time.Sleep(100 * time.Millisecond)
+
+	// Now close all clients
 	for _, client := range h.clients {
 		client.Close()
 	}
 	h.clients = nil
+	log.Print("Hub cleanup complete")
 }
