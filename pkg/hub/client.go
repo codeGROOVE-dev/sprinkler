@@ -21,6 +21,7 @@ type Client struct {
 	ID           string
 	subscription Subscription
 	closeOnce    sync.Once
+	pingSeq      int64 // Track ping sequence numbers
 }
 
 // NewClient creates a new client.
@@ -70,6 +71,8 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				return
 			}
 
+			log.Printf("EVENT: Sending event to client %s at %s: type=%s", c.ID, time.Now().Format(time.RFC3339), event.Type)
+
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				log.Printf("error setting write deadline for client %s: %v", c.ID, err)
 				return
@@ -79,19 +82,27 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				return
 			}
 
+			log.Printf("EVENT: Successfully sent event to client %s at %s", c.ID, time.Now().Format(time.RFC3339))
+
 		case <-ticker.C:
 			// Send ping to keep connection alive
+			c.pingSeq++
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				log.Printf("error setting ping deadline for client %s: %v", c.ID, err)
 				return
 			}
-			ping := map[string]string{"type": "ping", "timestamp": time.Now().Format(time.RFC3339)}
+			ping := map[string]any{
+				"type":      "ping",
+				"timestamp": time.Now().Format(time.RFC3339),
+				"seq":       c.pingSeq,
+			}
 			if err := websocket.JSON.Send(c.conn, ping); err != nil {
 				log.Printf("error sending ping to client %s: %v", c.ID, err)
 				return
 			}
-			// Ping sent successfully - debug logging disabled to avoid spam
-			// log.Printf("DEBUG: Sent ping to client %s", c.ID)
+			// Log ping sent for debugging timeout issues
+			log.Printf("PING: Sent ping #%d to client %s at %s (expecting pong within %v to avoid timeout)",
+				c.pingSeq, c.ID, time.Now().Format(time.RFC3339), 60*time.Second-54*time.Second)
 
 		case <-c.done:
 			log.Printf("client %s: done signal received", c.ID)

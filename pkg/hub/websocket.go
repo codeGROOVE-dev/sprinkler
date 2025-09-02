@@ -376,6 +376,22 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	return userOrgs, nil
 }
 
+// handleClientPing responds to a ping message from the client.
+func (*WebSocketHandler) handleClientPing(ws *websocket.Conn, msgMap map[string]any, clientID string) {
+	pong := map[string]any{"type": "pong"}
+	// Echo back any sequence number if present
+	if seq, ok := msgMap["seq"]; ok {
+		pong["seq"] = seq
+	}
+	if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		log.Printf("failed to set write deadline for pong to client %s: %v", clientID, err)
+		return
+	}
+	if err := websocket.JSON.Send(ws, pong); err != nil {
+		log.Printf("failed to send pong to client %s: %v", clientID, err)
+	}
+}
+
 // Handle handles a WebSocket connection.
 //
 //nolint:funlen,gocyclo // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
@@ -641,7 +657,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
-	logger.Info("sent subscription confirmation to client", logger.Fields{"ip": ip, "org": sub.Organization})
+	logger.Info("sent subscription confirmation to client", logger.Fields{
+		"ip":        ip,
+		"org":       sub.Organization,
+		"client_id": client.ID,
+		"time":      time.Now().Format(time.RFC3339),
+	})
 
 	// Register client
 	h.hub.Register(client)
@@ -659,6 +680,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		log.Printf("failed to set read deadline for %s: %v", ip, err)
 		return
 	}
+	log.Printf("DEADLINE: Initial read deadline set for client %s: %v from now", client.ID, readDeadline)
 	for {
 		var msg any
 		err := websocket.JSON.Receive(ws, &msg)
@@ -670,34 +692,39 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 			case strings.Contains(err.Error(), "use of closed network connection"):
 				log.Printf("client %s connection already closed", client.ID)
 			case strings.Contains(err.Error(), "i/o timeout"):
-				log.Printf("client %s read timeout (no activity for %v)", client.ID, readDeadline)
+				log.Printf("TIMEOUT: client %s read timeout at %s (no messages received for %v)",
+					client.ID, time.Now().Format(time.RFC3339), readDeadline)
 			default:
 				log.Printf("client %s read error: %v", client.ID, err)
 			}
 			break
 		}
+
+		// Log that we received a message from client
+		log.Printf("MESSAGE: Received from client %s at %s: %+v", client.ID, time.Now().Format(time.RFC3339), msg)
+
 		// Reset read deadline on any message
 		if err := ws.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
 			log.Printf("failed to reset read deadline for client %s: %v", client.ID, err)
 			break
 		}
+		log.Printf("DEADLINE: Reset read deadline for client %s after receiving message at %s", client.ID, time.Now().Format(time.RFC3339))
 
 		// Check if it's a pong response or other expected message
 		if msgMap, ok := msg.(map[string]any); ok {
 			if msgType, ok := msgMap["type"].(string); ok {
 				switch msgType {
 				case "pong":
-					// Expected pong response to our ping - debug logging disabled to avoid spam
-					// log.Printf("DEBUG: Received pong from client %s", client.ID)
+					// Log pong received for debugging timeout issues
+					seq := int64(0)
+					if seqVal, ok := msgMap["seq"].(float64); ok {
+						seq = int64(seqVal)
+					}
+					log.Printf("PONG: Received pong #%d from client %s at %s", seq, client.ID, time.Now().Format(time.RFC3339))
 					continue
 				case "ping":
 					// Client sent us a ping, send pong back
-					pong := map[string]string{"type": "pong"}
-					if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err == nil {
-						if err := websocket.JSON.Send(ws, pong); err != nil {
-							log.Printf("failed to send pong to client %s: %v", client.ID, err)
-						}
-					}
+					h.handleClientPing(ws, msgMap, client.ID)
 					continue
 				case "keepalive", "heartbeat":
 					// Common keepalive messages - just acknowledge receipt
