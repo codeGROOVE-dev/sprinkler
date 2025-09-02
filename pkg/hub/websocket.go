@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"log"
 	"math/big"
 	"regexp"
@@ -81,19 +82,39 @@ func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (st
 
 	authHeader := ws.Request().Header.Get("Authorization")
 	if authHeader == "" {
-		logger.Warn("missing Authorization header", logger.Fields{"ip": ip})
+		logger.Warn("WebSocket authentication failed: missing Authorization header", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+			"path":       ws.Request().URL.Path,
+		})
 		return "", false
 	}
 
 	const bearerPrefix = "Bearer "
 	if !strings.HasPrefix(authHeader, bearerPrefix) {
-		logger.Warn("invalid Authorization header format", logger.Fields{"ip": ip})
+		logger.Warn("WebSocket authentication failed: invalid Authorization header format", logger.Fields{
+			"ip":            ip,
+			"user_agent":    ws.Request().UserAgent(),
+			"path":          ws.Request().URL.Path,
+			"header_prefix": authHeader[:min(10, len(authHeader))], // Log first 10 chars
+		})
 		return "", false
 	}
 	githubToken := strings.TrimPrefix(authHeader, bearerPrefix)
 
 	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
-		logger.Warn("invalid GitHub token format", logger.Fields{"ip": ip})
+		// Log token details for debugging without revealing the full token
+		tokenPrefix := ""
+		if len(githubToken) >= 4 {
+			tokenPrefix = githubToken[:4]
+		}
+		logger.Warn("WebSocket authentication failed: invalid GitHub token format", logger.Fields{
+			"ip":           ip,
+			"user_agent":   ws.Request().UserAgent(),
+			"path":         ws.Request().URL.Path,
+			"token_prefix": tokenPrefix,
+			"token_length": len(githubToken),
+		})
 		return "", false
 	}
 
@@ -159,8 +180,15 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 			username, userOrgs, err := ghClient.UserAndOrgs(ctx)
 			if err != nil {
-				logger.Error("GitHub auth failed", err, logger.Fields{
-					"ip": ip,
+				// Log token details for debugging
+				tokenPrefix := ""
+				if len(githubToken) >= 4 {
+					tokenPrefix = githubToken[:4]
+				}
+				logger.Error("GitHub auth failed for wildcard org subscription", err, logger.Fields{
+					"ip":           ip,
+					"token_prefix": tokenPrefix,
+					"token_length": len(githubToken),
 				})
 
 				// Send error response to client
@@ -204,9 +232,16 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 		username, userOrgs, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
 		if err != nil {
-			logger.Error("GitHub auth failed", err, logger.Fields{
-				"ip":  ip,
-				"org": sub.Organization,
+			// Log token details for debugging
+			tokenPrefix := ""
+			if len(githubToken) >= 4 {
+				tokenPrefix = githubToken[:4]
+			}
+			logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
+				"ip":           ip,
+				"org":          sub.Organization,
+				"token_prefix": tokenPrefix,
+				"token_length": len(githubToken),
 			})
 
 			// Send error response to client
@@ -250,8 +285,15 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
 	if err != nil {
-		logger.Error("GitHub auth failed", err, logger.Fields{
-			"ip": ip,
+		// Log token details for debugging
+		tokenPrefix := ""
+		if len(githubToken) >= 4 {
+			tokenPrefix = githubToken[:4]
+		}
+		logger.Error("GitHub auth failed (no specific org)", err, logger.Fields{
+			"ip":           ip,
+			"token_prefix": tokenPrefix,
+			"token_length": len(githubToken),
 		})
 
 		// Send error response to client
@@ -303,14 +345,58 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Get client IP
 	ip := security.ClientIP(ws.Request())
 
+	// Log incoming WebSocket request
+	logger.Info("WebSocket connection attempt", logger.Fields{
+		"ip":         ip,
+		"user_agent": ws.Request().UserAgent(),
+		"path":       ws.Request().URL.Path,
+		"origin":     ws.Request().Header.Get("Origin"),
+	})
+
 	githubToken, ok := h.extractGitHubToken(ws, ip)
 	if !ok {
+		// Send 403 error response to client
+		errorResp := map[string]string{
+			"type":    "error",
+			"error":   "authentication_failed",
+			"message": "Invalid or missing GitHub token. Please provide a valid token in the Authorization header.",
+		}
+
+		// Try to send error response
+		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				logger.Error("failed to send 403 error response", sendErr, logger.Fields{"ip": ip})
+			}
+		}
+
+		logger.Warn("WebSocket connection rejected: 403 Forbidden - authentication failed", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+			"reason":     "invalid_token",
+		})
 		return
 	}
 
 	// Check connection limit
 	if !h.connLimiter.Add(ip) {
-		logger.Warn("connection limit exceeded", logger.Fields{"ip": ip})
+		// Send 429 error response to client
+		errorResp := map[string]string{
+			"type":    "error",
+			"error":   "connection_limit_exceeded",
+			"message": "Too many connections from this IP address. Please try again later.",
+		}
+
+		// Try to send error response
+		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				logger.Error("failed to send 429 error response", sendErr, logger.Fields{"ip": ip})
+			}
+		}
+
+		logger.Warn("WebSocket connection rejected: 429 Too Many Requests - connection limit exceeded", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+		})
 		return
 	}
 	defer h.connLimiter.Remove(ip)
@@ -324,6 +410,11 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Read subscription
 	sub, err := h.readSubscription(ws, ip)
 	if err != nil {
+		logger.Warn("WebSocket connection rejected: failed to read subscription", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+			"error":      err.Error(),
+		})
 		return
 	}
 
@@ -337,7 +428,26 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 
 	// Validate subscription data
 	if err := sub.Validate(); err != nil {
-		log.Printf("invalid subscription from %s: %v", ip, err)
+		// Send error response to client
+		errorResp := map[string]string{
+			"type":    "error",
+			"error":   "invalid_subscription",
+			"message": fmt.Sprintf("Invalid subscription: %v", err),
+		}
+
+		// Try to send error response
+		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				logger.Error("failed to send subscription error response", sendErr, logger.Fields{"ip": ip})
+			}
+		}
+
+		logger.Warn("WebSocket connection rejected: invalid subscription", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+			"error":      err.Error(),
+			"org":        sub.Organization,
+		})
 		return
 	}
 
@@ -345,7 +455,26 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	if len(sub.EventTypes) > 0 && h.allowedEventsMap != nil {
 		for _, requestedType := range sub.EventTypes {
 			if !h.allowedEventsMap[requestedType] {
-				log.Printf("event type '%s' not allowed from %s", requestedType, ip)
+				// Send error response to client
+				errorResp := map[string]string{
+					"type":    "error",
+					"error":   "event_type_not_allowed",
+					"message": fmt.Sprintf("Event type '%s' is not allowed", requestedType),
+				}
+
+				// Try to send error response
+				if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
+					if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+						logger.Error("failed to send event type error response", sendErr, logger.Fields{"ip": ip})
+					}
+				}
+
+				logger.Warn("WebSocket connection rejected: event type not allowed", logger.Fields{
+					"ip":         ip,
+					"user_agent": ws.Request().UserAgent(),
+					"event_type": requestedType,
+					"org":        sub.Organization,
+				})
 				return
 			}
 		}
@@ -362,6 +491,13 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Validate authentication and set username
 	userOrgs, err := h.validateAuth(ctx, ws, &sub, githubToken, ip)
 	if err != nil {
+		// Error response already sent by validateAuth
+		logger.Warn("WebSocket connection rejected: authentication/authorization failed", logger.Fields{
+			"ip":         ip,
+			"user_agent": ws.Request().UserAgent(),
+			"org":        sub.Organization,
+			"error":      err.Error(),
+		})
 		return
 	}
 

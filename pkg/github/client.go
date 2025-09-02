@@ -92,16 +92,23 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 
 			case http.StatusUnauthorized:
 				// Don't retry on auth failures
+				log.Printf("GitHub API: 401 Unauthorized - invalid token for /user endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
 				// Check if rate limited
 				if resp.Header.Get("X-RateLimit-Remaining") == "0" { //nolint:canonicalheader // GitHub API header
 					resetTime := resp.Header.Get("X-RateLimit-Reset") //nolint:canonicalheader // GitHub API header
-					log.Printf("GitHub API rate limit hit, reset at %s", resetTime)
+					log.Printf("GitHub API: 403 Forbidden - rate limit exceeded for /user endpoint, reset at %s", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
+				// Log token prefix for debugging (first 4 chars only)
+				tokenPrefix := ""
+				if len(c.token) >= 4 {
+					tokenPrefix = c.token[:4]
+				}
+				log.Printf("GitHub API: 403 Forbidden - access denied for /user endpoint (token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
@@ -212,16 +219,23 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 				return nil
 
 			case http.StatusUnauthorized:
+				log.Printf("GitHub API: 401 Unauthorized - invalid token for /user/orgs endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
 				// Check if it's a rate limit issue
 				if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
 					resetTime := resp.Header.Get("X-Ratelimit-Reset")
-					log.Printf("GitHub API rate limit hit, reset at %s", resetTime)
+					log.Printf("GitHub API: 403 Forbidden - rate limit exceeded for /user/orgs endpoint, reset at %s", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
+				// Log token prefix for debugging (first 4 chars only)
+				tokenPrefix := ""
+				if len(c.token) >= 4 {
+					tokenPrefix = c.token[:4]
+				}
+				log.Printf("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint (token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:

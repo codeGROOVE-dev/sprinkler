@@ -60,6 +60,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if r.Method != http.MethodPost {
+		logger.Warn("webhook rejected: invalid method", logger.Fields{
+			"method":      r.Method,
+			"remote_addr": r.RemoteAddr,
+			"path":        r.URL.Path,
+		})
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -80,6 +85,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check content length before reading
 	if r.ContentLength > maxPayloadSize {
+		logger.Warn("webhook rejected: payload too large", logger.Fields{
+			"content_length": r.ContentLength,
+			"max_size":       maxPayloadSize,
+			"delivery_id":    deliveryID,
+			"event_type":     eventType,
+		})
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -99,7 +110,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Verify signature
 	if !VerifySignature(body, signature, h.secret) {
-		logger.Warn("webhook signature verification failed", logger.Fields{"delivery_id": deliveryID})
+		logger.Warn("webhook rejected: 401 Unauthorized - signature verification failed", logger.Fields{
+			"delivery_id":      deliveryID,
+			"event_type":       eventType,
+			"remote_addr":      r.RemoteAddr,
+			"signature_exists": signature != "",
+			"secret_set":       h.secret != "",
+		})
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -107,7 +124,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse payload
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		logger.Error("error parsing webhook payload", err, logger.Fields{"delivery_id": deliveryID})
+		logger.Error("webhook rejected: 400 Bad Request - error parsing payload", err, logger.Fields{
+			"delivery_id":  deliveryID,
+			"event_type":   eventType,
+			"remote_addr":  r.RemoteAddr,
+			"payload_size": len(body),
+		})
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -134,18 +156,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to write response", err, logger.Fields{"delivery_id": deliveryID})
 	}
 
-	// Log full payload for development
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		logger.Error("failed to marshal payload for logging", err, logger.Fields{"delivery_id": deliveryID})
-	} else {
-		logger.Info("processed webhook", logger.Fields{
-			"event_type":  eventType,
-			"delivery_id": deliveryID,
-			"pr_url":      prURL,
-			"payload":     string(payloadJSON),
-		})
-	}
+	// Log successful webhook processing
+	logger.Info("webhook processed successfully", logger.Fields{
+		"event_type":   eventType,
+		"delivery_id":  deliveryID,
+		"pr_url":       prURL,
+		"remote_addr":  r.RemoteAddr,
+		"payload_size": len(body),
+	})
 }
 
 // VerifySignature validates the GitHub webhook signature.
