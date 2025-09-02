@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -56,9 +57,8 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 	ticker := time.NewTicker(pingInterval)
 	defer func() {
 		ticker.Stop()
-		if err := c.conn.Close(); err != nil {
-			log.Printf("failed to close websocket connection: %v", err)
-		}
+		// Don't close the websocket here - let the main handler do it
+		// This prevents double-close errors
 		c.Close()
 	}()
 
@@ -80,23 +80,37 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			}
 
 		case <-ticker.C:
-			// Send ping as empty JSON object
+			// Send ping to keep connection alive
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				log.Printf("error setting ping deadline for client %s: %v", c.ID, err)
 				return
 			}
-			ping := map[string]string{"type": "ping"}
+			ping := map[string]string{"type": "ping", "timestamp": time.Now().Format(time.RFC3339)}
 			if err := websocket.JSON.Send(c.conn, ping); err != nil {
 				log.Printf("error sending ping to client %s: %v", c.ID, err)
 				return
 			}
+			// Ping sent successfully - debug logging disabled to avoid spam
+			// log.Printf("DEBUG: Sent ping to client %s", c.ID)
 
 		case <-c.done:
 			log.Printf("client %s: done signal received", c.ID)
 			return
 
 		case <-ctx.Done():
-			log.Printf("client %s: context cancelled", c.ID)
+			// Context cancellation usually means client disconnected
+			var reason string
+			switch ctx.Err() {
+			case context.Canceled:
+				reason = "client disconnected or connection lost"
+			case context.DeadlineExceeded:
+				reason = "connection timeout"
+			case nil:
+				reason = "context done without error"
+			default:
+				reason = fmt.Sprintf("context error: %v", ctx.Err())
+			}
+			log.Printf("client %s: context done (reason: %s)", c.ID, reason)
 			return
 		}
 	}

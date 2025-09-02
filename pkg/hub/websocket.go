@@ -93,7 +93,14 @@ func (h *WebSocketHandler) PreValidateAuth(r *http.Request) bool {
 	}
 
 	githubToken := strings.TrimPrefix(authHeader, bearerPrefix)
-	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
+
+	// Check length first (cheapest check)
+	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength {
+		return false
+	}
+
+	// Then pattern (more expensive but still fast)
+	if !githubTokenPattern.MatchString(githubToken) {
 		return false
 	}
 
@@ -306,8 +313,10 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	}
 
 	// No organization specified - just get user info and all their orgs
-	logger.Info("validating GitHub authentication (no specific org)", logger.Fields{
-		"ip": ip,
+	// For GitHub Apps, this will auto-detect the installation org
+	logger.Info("validating GitHub authentication (no org specified in subscription)", logger.Fields{
+		"ip":               ip,
+		"subscription_org": sub.Organization,
 	})
 
 	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
@@ -353,6 +362,17 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 	// Set the authenticated username in subscription
 	sub.Username = username
+
+	// For GitHub Apps with no org specified, auto-set to their installation org
+	if strings.HasPrefix(username, "app[") && sub.Organization == "" && len(userOrgs) == 1 {
+		sub.Organization = userOrgs[0]
+		logger.Info("auto-setting GitHub App subscription to installation org", logger.Fields{
+			"ip":  ip,
+			"org": sub.Organization,
+			"app": username,
+		})
+	}
+
 	return userOrgs, nil
 }
 
@@ -360,19 +380,47 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 //
 //nolint:funlen,gocyclo // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
 func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
+	// Log that we entered the handler
+	log.Print("WebSocket Handle() started")
+
 	// Use the request's context for proper lifecycle management
 	ctx, cancel := context.WithCancel(ws.Request().Context())
 	defer cancel()
 
-	// Ensure WebSocket is always closed
+	// Ensure WebSocket is properly closed
 	defer func() {
+		clientIP := security.ClientIP(ws.Request())
+		log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
+
+		// Send a final shutdown message if possible
+		shutdownMsg := map[string]string{"type": "server_closing", "code": "1001"}
+		if err := ws.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			log.Printf("failed to set write deadline for shutdown message: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, shutdownMsg); err != nil {
+			// Expected during abrupt disconnection
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Printf("failed to send shutdown message: %v", err)
+			}
+		}
+
+		// Close the connection
 		if err := ws.Close(); err != nil {
-			log.Printf("failed to close websocket: %v", err)
+			// Check if it's already closed - not an error
+			switch {
+			case strings.Contains(err.Error(), "use of closed network connection"):
+				log.Printf("WebSocket already closed for IP %s (expected during normal shutdown)", clientIP)
+			case strings.Contains(err.Error(), "broken pipe"):
+				log.Printf("WebSocket broken pipe for IP %s (client already disconnected)", clientIP)
+			default:
+				log.Printf("ERROR: failed to close websocket for IP %s: %v", clientIP, err)
+			}
 		}
 	}()
 
 	// Get client IP
 	ip := security.ClientIP(ws.Request())
+	log.Printf("WebSocket Handle() got IP: %s", ip)
 
 	// Log incoming WebSocket request
 	logger.Info("WebSocket connection attempt", logger.Fields{
@@ -531,13 +579,23 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	}
 
 	// Create client with unique ID using crypto-random only (no timestamp for security)
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const idLength = 32 // Increased for better entropy (32 chars = ~190 bits)
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+	const idLength = 32 // 32 chars with 64 possible values = 192 bits of entropy
 	id := make([]byte, idLength)
 	for i := range id {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			logger.Error("failed to generate random client ID", err, logger.Fields{"ip": ip})
+			// Critical security failure - cannot continue without secure randomness
+			logger.Error("CRITICAL: failed to generate secure random client ID", err, logger.Fields{"ip": ip})
+			// Send error to client before returning
+			errorResp := map[string]string{
+				"type":    "error",
+				"error":   "internal_error",
+				"message": "Failed to initialize secure session",
+			}
+			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+				logger.Error("failed to send error response", sendErr, logger.Fields{"ip": ip})
+			}
 			return
 		}
 		id[i] = charset[n.Int64()]
@@ -605,13 +663,52 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		var msg any
 		err := websocket.JSON.Receive(ws, &msg)
 		if err != nil {
+			// Log why we're exiting the read loop
+			switch {
+			case err.Error() == "EOF":
+				log.Printf("client %s closed connection (EOF received)", client.ID)
+			case strings.Contains(err.Error(), "use of closed network connection"):
+				log.Printf("client %s connection already closed", client.ID)
+			case strings.Contains(err.Error(), "i/o timeout"):
+				log.Printf("client %s read timeout (no activity for %v)", client.ID, readDeadline)
+			default:
+				log.Printf("client %s read error: %v", client.ID, err)
+			}
 			break
 		}
 		// Reset read deadline on any message
 		if err := ws.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
-			log.Printf("failed to reset read deadline for %s: %v", ip, err)
+			log.Printf("failed to reset read deadline for client %s: %v", client.ID, err)
 			break
 		}
-		// We don't expect any messages from client after subscription
+
+		// Check if it's a pong response or other expected message
+		if msgMap, ok := msg.(map[string]any); ok {
+			if msgType, ok := msgMap["type"].(string); ok {
+				switch msgType {
+				case "pong":
+					// Expected pong response to our ping - debug logging disabled to avoid spam
+					// log.Printf("DEBUG: Received pong from client %s", client.ID)
+					continue
+				case "ping":
+					// Client sent us a ping, send pong back
+					pong := map[string]string{"type": "pong"}
+					if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err == nil {
+						if err := websocket.JSON.Send(ws, pong); err != nil {
+							log.Printf("failed to send pong to client %s: %v", client.ID, err)
+						}
+					}
+					continue
+				case "keepalive", "heartbeat":
+					// Common keepalive messages - just acknowledge receipt
+					continue
+				default:
+					// Fall through to log as unexpected
+				}
+			}
+		}
+
+		// Log only truly unexpected messages
+		log.Printf("client %s sent unexpected message after subscription: %+v", client.ID, msg)
 	}
 }
