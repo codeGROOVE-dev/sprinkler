@@ -687,7 +687,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		log.Printf("failed to set read deadline for %s: %v", ip, err)
 		return
 	}
-	log.Printf("DEADLINE: Initial read deadline set for client %s: %v from now", client.ID, readTimeout)
+	// Read deadline set for responsive shutdown
 
 	// Message read loop with responsive shutdown
 	for {
@@ -724,27 +724,18 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 			break
 		}
 
-		// Log that we received a message from client
-		log.Printf("MESSAGE: Received from client %s at %s: %+v", client.ID, time.Now().Format(time.RFC3339), msg)
-
 		// Reset read deadline on any message
 		if err := ws.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 			log.Printf("failed to reset read deadline for client %s: %v", client.ID, err)
 			break
 		}
-		log.Printf("DEADLINE: Reset read deadline for client %s after receiving message at %s", client.ID, time.Now().Format(time.RFC3339))
 
 		// Check if it's a pong response or other expected message
 		if msgMap, ok := msg.(map[string]any); ok {
 			if msgType, ok := msgMap["type"].(string); ok {
 				switch msgType {
 				case "pong":
-					// Log pong received for debugging timeout issues
-					seq := int64(0)
-					if seqVal, ok := msgMap["seq"].(float64); ok {
-						seq = int64(seqVal)
-					}
-					log.Printf("PONG: Received pong #%d from client %s at %s", seq, client.ID, time.Now().Format(time.RFC3339))
+					// Pong received - connection is alive
 					continue
 				case "ping":
 					// Client sent us a ping, send pong back

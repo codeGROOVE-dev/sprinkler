@@ -87,7 +87,7 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				return
 			}
 
-			log.Printf("EVENT: Sending event to client %s at %s: type=%s", c.ID, time.Now().Format(time.RFC3339), event.Type)
+			log.Printf("Sending event to client %s: type=%s", c.ID, event.Type)
 
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				log.Printf("error setting write deadline for client %s: %v", c.ID, err)
@@ -98,7 +98,7 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				return
 			}
 
-			log.Printf("EVENT: Successfully sent event to client %s at %s", c.ID, time.Now().Format(time.RFC3339))
+			log.Printf("✓ Event sent to client %s", c.ID)
 
 		case <-ticker.C:
 			// Send ping to keep connection alive
@@ -116,9 +116,7 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				log.Printf("error sending ping to client %s: %v", c.ID, err)
 				return
 			}
-			// Log ping sent for debugging timeout issues
-			log.Printf("PING: Sent ping #%d to client %s at %s (expecting pong within %v to avoid timeout)",
-				c.pingSeq, c.ID, time.Now().Format(time.RFC3339), 60*time.Second-54*time.Second)
+			// Ping sent to keep connection alive
 
 		case <-c.done:
 			log.Printf("client %s: done signal received", c.ID)
