@@ -173,8 +173,12 @@ func (h *Hub) cleanup() {
 		}
 	}
 
-	// Give clients a moment to receive the message
-	time.Sleep(100 * time.Millisecond)
+	// Give clients a moment to process shutdown messages and close gracefully
+	// This allows time for proper WebSocket close frames to be sent
+	if len(h.clients) > 0 {
+		log.Printf("Waiting for %d clients to receive shutdown messages...", len(h.clients))
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	// Now close all clients
 	for _, client := range h.clients {

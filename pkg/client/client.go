@@ -278,15 +278,15 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 	c.logger.Debug("Waiting for subscription confirmation")
 
-	// Set a read deadline for subscription confirmation to prevent indefinite hanging
-	if err := ws.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	// Set a short read deadline for subscription confirmation
+	if err := ws.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		return fmt.Errorf("failed to set read deadline: %w", err)
 	}
 
 	// Read first response - should be either an error or subscription confirmation
 	var firstResponse map[string]any
 	if err := websocket.JSON.Receive(ws, &firstResponse); err != nil {
-		return fmt.Errorf("failed to read subscription response (timeout after 10s): %w", err)
+		return fmt.Errorf("failed to read subscription response (timeout after 2s): %w", err)
 	}
 
 	// Clear read deadline after successful read
@@ -396,22 +396,51 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
-// readEvents reads and processes events from the WebSocket.
+// readEvents reads and processes events from the WebSocket with responsive shutdown.
 func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
+	// Set a short read timeout to make shutdown more responsive
+	readTimeout := 2 * time.Second
+
 	for {
+		// Check for context cancellation first
 		select {
 		case <-ctx.Done():
+			c.logger.Debug("readEvents: context cancelled, shutting down")
 			return ctx.Err()
 		default:
 		}
 
+		// Set read timeout for responsive shutdown
+		if err := ws.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			return fmt.Errorf("failed to set read timeout: %w", err)
+		}
+
 		// Receive message
 		var response map[string]any
-		if err := websocket.JSON.Receive(ws, &response); err != nil {
+		err := websocket.JSON.Receive(ws, &response)
+		if err != nil {
+			// Check if it's a timeout error - may be normal during shutdown
+			if strings.Contains(err.Error(), "i/o timeout") {
+				// Check context again after timeout
+				select {
+				case <-ctx.Done():
+					c.logger.Debug("readEvents: context cancelled during timeout, shutting down")
+					return ctx.Err()
+				default:
+					// Continue reading if context is still active
+					continue
+				}
+			}
+
 			c.logger.Error(separatorLine)
 			c.logger.Error("Lost connection while reading!", "error", err, "events_received", c.eventCount)
 			c.logger.Error(separatorLine)
 			return fmt.Errorf("read: %w", err)
+		}
+
+		// Clear read timeout after successful read
+		if err := ws.SetReadDeadline(time.Time{}); err != nil {
+			c.logger.Warn("Failed to clear read timeout", "error", err)
 		}
 
 		// Check message type

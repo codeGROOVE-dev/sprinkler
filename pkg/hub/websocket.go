@@ -408,14 +408,15 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		clientIP := security.ClientIP(ws.Request())
 		log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
 
-		// Send a final shutdown message if possible
+		// Send a final shutdown message to allow graceful client disconnect
 		shutdownMsg := map[string]string{"type": "server_closing", "code": "1001"}
-		if err := ws.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		if err := ws.SetWriteDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 			log.Printf("failed to set write deadline for shutdown message: %v", err)
 		}
 		if err := websocket.JSON.Send(ws, shutdownMsg); err != nil {
-			// Expected during abrupt disconnection
-			if !strings.Contains(err.Error(), "use of closed network connection") {
+			// Expected during abrupt disconnection - don't log common cases
+			if !strings.Contains(err.Error(), "use of closed network connection") &&
+				!strings.Contains(err.Error(), "broken pipe") {
 				log.Printf("failed to send shutdown message: %v", err)
 			}
 		}
@@ -674,14 +675,37 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Start event sender in goroutine
 	go client.Run(ctx, pingInterval, writeTimeout)
 
-	// Handle incoming messages (mainly for disconnection detection)
+	// Handle incoming messages with responsive shutdown
+	// Use a shorter read timeout to make shutdown more responsive
+	readTimeout := 2 * time.Second
 
-	if err := ws.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+	// Create a ticker for periodic context checks during blocking reads
+	contextCheckTicker := time.NewTicker(1 * time.Second)
+	defer contextCheckTicker.Stop()
+
+	if err := ws.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 		log.Printf("failed to set read deadline for %s: %v", ip, err)
 		return
 	}
-	log.Printf("DEADLINE: Initial read deadline set for client %s: %v from now", client.ID, readDeadline)
+	log.Printf("DEADLINE: Initial read deadline set for client %s: %v from now", client.ID, readTimeout)
+
+	// Message read loop with responsive shutdown
 	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("client %s: context cancelled during read loop, shutting down", client.ID)
+			return
+		case <-contextCheckTicker.C:
+			// Periodic check for context cancellation during blocking operations
+			if ctx.Err() != nil {
+				log.Printf("client %s: context cancelled during periodic check, shutting down", client.ID)
+				return
+			}
+			continue
+		default:
+			// Non-blocking read attempt
+		}
+
 		var msg any
 		err := websocket.JSON.Receive(ws, &msg)
 		if err != nil {
@@ -704,7 +728,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		log.Printf("MESSAGE: Received from client %s at %s: %+v", client.ID, time.Now().Format(time.RFC3339), msg)
 
 		// Reset read deadline on any message
-		if err := ws.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+		if err := ws.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 			log.Printf("failed to reset read deadline for client %s: %v", client.ID, err)
 			break
 		}
