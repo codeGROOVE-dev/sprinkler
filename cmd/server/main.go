@@ -252,10 +252,12 @@ func main() {
 		// Stop the connection limiter cleanup routine
 		connLimiter.Stop()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		// Give server time to complete active requests and flush responses
+		// Quick shutdown if no active work, longer if processing requests
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
 
-		if err := server.Shutdown(ctx); err != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("server shutdown error: %v", err)
 		}
 

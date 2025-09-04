@@ -65,6 +65,22 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Context cancellation usually means server shutdown or client disconnection
+			var reason string
+			switch ctx.Err() {
+			case context.Canceled:
+				reason = "server shutdown or client disconnected"
+			case context.DeadlineExceeded:
+				reason = "connection timeout"
+			case nil:
+				reason = "context done without error"
+			default:
+				reason = fmt.Sprintf("context error: %v", ctx.Err())
+			}
+			log.Printf("client %s: context done, shutting down (reason: %s)", c.ID, reason)
+			return
+
 		case event, ok := <-c.send:
 			if !ok {
 				log.Printf("client %s: send channel closed", c.ID)
@@ -106,22 +122,6 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 
 		case <-c.done:
 			log.Printf("client %s: done signal received", c.ID)
-			return
-
-		case <-ctx.Done():
-			// Context cancellation usually means client disconnected
-			var reason string
-			switch ctx.Err() {
-			case context.Canceled:
-				reason = "client disconnected or connection lost"
-			case context.DeadlineExceeded:
-				reason = "connection timeout"
-			case nil:
-				reason = "context done without error"
-			default:
-				reason = fmt.Sprintf("context error: %v", ctx.Err())
-			}
-			log.Printf("client %s: context done (reason: %s)", c.ID, reason)
 			return
 		}
 	}
