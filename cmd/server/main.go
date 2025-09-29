@@ -17,6 +17,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/secrets"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/webhook"
 )
@@ -47,9 +48,67 @@ var (
 func main() {
 	flag.Parse()
 
+	// Initialize secrets manager if running on Cloud Run
+	var secretsManager *secrets.Manager
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Check for project ID to determine if we should use Secret Manager
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("GCP_PROJECT")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("PROJECT_ID")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("GCLOUD_PROJECT")
+	}
+
+	// Check if we're running on Cloud Run
+	isCloudRun := os.Getenv("K_SERVICE") != "" || os.Getenv("CLOUD_RUN_TIMEOUT_SECONDS") != ""
+
+	if isCloudRun && projectID == "" {
+		log.Print("WARNING: Running on Cloud Run but no project ID found. Set GCP_PROJECT_ID environment variable to use Secret Manager")
+	}
+
+	if projectID != "" {
+		credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+		var err error
+		log.Printf("attempting to initialize Google Secret Manager: project_id=%s credentials_path=%s", projectID, credentialsPath)
+
+		secretsManager, err = secrets.New(ctx, projectID, credentialsPath)
+		if err != nil {
+			log.Printf("WARNING: failed to initialize Google Secret Manager, falling back to env vars: project_id=%s error=%v", projectID, err)
+		} else {
+			defer func() {
+				if err := secretsManager.Close(); err != nil {
+					log.Printf("WARNING: failed to close secrets manager: error=%v", err)
+				}
+			}()
+			log.Printf("Google Secret Manager successfully initialized: project_id=%s", projectID)
+		}
+	}
+
+	// Get webhook secret from Secret Manager or environment variable
+	webhookSecretValue := *webhookSecret
+	if webhookSecretValue == "" && secretsManager != nil {
+		log.Print("attempting to fetch GITHUB_WEBHOOK_SECRET from Secret Manager")
+		value, err := secretsManager.GetWithEnvOverride(ctx, "GITHUB_WEBHOOK_SECRET", "GITHUB_WEBHOOK_SECRET")
+		if err != nil {
+			log.Printf("WARNING: failed to fetch GITHUB_WEBHOOK_SECRET from Secret Manager: error=%v", err)
+		} else if value != "" {
+			webhookSecretValue = value
+			log.Print("successfully loaded GITHUB_WEBHOOK_SECRET from Secret Manager")
+		}
+	}
+
 	// Validate webhook secret is configured (REQUIRED for security)
-	if *webhookSecret == "" {
-		log.Fatal("ERROR: Webhook secret is required for security. Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable.")
+	if webhookSecretValue == "" {
+		log.Fatal("ERROR: Webhook secret is required for security. Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable or secret.")
 	}
 
 	// Validate allowed events is configured (REQUIRED)
@@ -72,10 +131,6 @@ func main() {
 	}
 
 	// CORS support removed - WebSocket clients should handle auth via Authorization header
-
-	// Create context for the application
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	h := hub.NewHub()
 	go h.Run(ctx)
@@ -107,7 +162,7 @@ func main() {
 	log.Println("Registered health check handler at /")
 
 	// Webhook handler - exact match
-	webhookHandler := webhook.NewHandler(h, *webhookSecret, allowedEventTypes)
+	webhookHandler := webhook.NewHandler(h, webhookSecretValue, allowedEventTypes)
 	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
 		ip := security.ClientIP(r)
 		startTime := time.Now()
