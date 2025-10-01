@@ -138,7 +138,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	prURL := ExtractPRURL(eventType, payload)
 	if prURL == "" {
 		// Log full payload to understand the structure
-		payloadJSON, err := json.MarshalIndent(payload, "", "  ")
+		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
 			logger.Warn("failed to marshal payload for logging", logger.Fields{
 				"event_type":  eventType,
