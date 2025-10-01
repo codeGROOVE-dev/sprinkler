@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -219,25 +220,53 @@ func ExtractPRURL(eventType string, payload map[string]any) string {
 	case "check_run", "check_suite":
 		// Extract PR URLs from check events if available
 		if checkRun, ok := payload["check_run"].(map[string]any); ok {
-			if prs, ok := checkRun["pull_requests"].([]any); ok && len(prs) > 0 {
-				if pr, ok := prs[0].(map[string]any); ok {
-					if htmlURL, ok := pr["html_url"].(string); ok {
-						return htmlURL
-					}
-				}
+			if url := extractPRFromCheckEvent(checkRun, payload); url != "" {
+				return url
 			}
 		}
 		if checkSuite, ok := payload["check_suite"].(map[string]any); ok {
-			if prs, ok := checkSuite["pull_requests"].([]any); ok && len(prs) > 0 {
-				if pr, ok := prs[0].(map[string]any); ok {
-					if htmlURL, ok := pr["html_url"].(string); ok {
-						return htmlURL
-					}
-				}
+			if url := extractPRFromCheckEvent(checkSuite, payload); url != "" {
+				return url
 			}
 		}
 	default:
 		// For other event types, no PR URL can be extracted
 	}
 	return ""
+}
+
+// extractPRFromCheckEvent extracts PR URL from check_run or check_suite events.
+func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any) string {
+	prs, ok := checkEvent["pull_requests"].([]any)
+	if !ok || len(prs) == 0 {
+		return ""
+	}
+
+	pr, ok := prs[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	// Try html_url first
+	if htmlURL, ok := pr["html_url"].(string); ok {
+		return htmlURL
+	}
+
+	// Fallback: construct from number
+	num, ok := pr["number"].(float64)
+	if !ok {
+		return ""
+	}
+
+	repo, ok := payload["repository"].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	repoURL, ok := repo["html_url"].(string)
+	if !ok {
+		return ""
+	}
+
+	return repoURL + "/pull/" + strconv.Itoa(int(num))
 }
