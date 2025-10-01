@@ -32,6 +32,10 @@ const (
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	msgTypeField  = "type"
+
+	// Server ping timing constants.
+	expectedPingInterval = 54 * time.Second
+	pingDelayThreshold   = 10 * time.Second
 )
 
 // Event represents a webhook event received from the server.
@@ -63,14 +67,16 @@ type Config struct {
 
 // Client represents a WebSocket client with automatic reconnection.
 type Client struct {
-	logger     *slog.Logger
-	ws         *websocket.Conn
-	stopCh     chan struct{}
-	stoppedCh  chan struct{}
-	config     Config
-	eventCount int
-	retries    int
-	mu         sync.RWMutex
+	logger          *slog.Logger
+	ws              *websocket.Conn
+	stopCh          chan struct{}
+	stoppedCh       chan struct{}
+	config          Config
+	lastPingTime    time.Time // Time of last ping received
+	noActivitySince time.Time // Track when we last received anything
+	mu              sync.RWMutex
+	eventCount      int
+	retries         int
 }
 
 // New creates a new robust WebSocket client.
@@ -454,15 +460,43 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 
 		// Handle ping messages
 		if responseType == "ping" {
+			now := time.Now()
+
+			// Check if pings are arriving on schedule
+			c.mu.Lock()
+			lastPing := c.lastPingTime
+			c.lastPingTime = now
+			c.noActivitySince = now
+			c.mu.Unlock()
+
+			if !lastPing.IsZero() {
+				timeSinceLastPing := now.Sub(lastPing)
+				if timeSinceLastPing > expectedPingInterval+pingDelayThreshold {
+					c.logger.Warn("[PING-PONG] Delayed ping from server",
+						"expected_interval", expectedPingInterval,
+						"actual_interval", timeSinceLastPing,
+						"delay", timeSinceLastPing-expectedPingInterval)
+				}
+			}
+
 			c.logger.Debug("[PING-PONG] Received PING from server")
 			pong := map[string]any{msgTypeField: "pong"}
 			// Echo back any sequence number if present
 			if seq, ok := response["seq"]; ok {
 				pong["seq"] = seq
 			}
+			// Set write deadline to ensure timely pong response
+			if err := ws.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				c.logger.Error("[PING-PONG] Failed to set write deadline", "error", err)
+				return fmt.Errorf("error setting write deadline: %w", err)
+			}
 			if err := websocket.JSON.Send(ws, pong); err != nil {
 				c.logger.Error("[PING-PONG] Failed to send PONG response", "error", err)
 				return fmt.Errorf("error sending pong response: %w", err)
+			}
+			// Clear write deadline
+			if err := ws.SetWriteDeadline(time.Time{}); err != nil {
+				c.logger.Warn("[PING-PONG] Failed to clear write deadline", "error", err)
 			}
 			c.logger.Debug("[PING-PONG] Sent PONG response to server", "seq", pong["seq"])
 			continue
@@ -470,9 +504,17 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 
 		// Handle pong acknowledgments
 		if responseType == "pong" {
+			c.mu.Lock()
+			c.noActivitySince = time.Now()
+			c.mu.Unlock()
 			c.logger.Debug("[PING-PONG] Received PONG acknowledgment from server")
 			continue
 		}
+
+		// Update activity timestamp for any event
+		c.mu.Lock()
+		c.noActivitySince = time.Now()
+		c.mu.Unlock()
 
 		// Process the event inline
 		event := Event{
