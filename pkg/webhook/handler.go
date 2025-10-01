@@ -137,7 +137,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract PR URL
 	prURL := ExtractPRURL(eventType, payload)
 	if prURL == "" {
-		log.Printf("no PR URL found in %s event", eventType)
+		// Log full payload to understand the structure
+		payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+		logger.Info("no PR URL found in event - full payload", logger.Fields{
+			"event_type":  eventType,
+			"delivery_id": deliveryID,
+			"payload":     string(payloadJSON),
+		})
 		w.WriteHeader(http.StatusOK)
 		return
 	}
