@@ -407,8 +407,9 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 
 // readEvents reads and processes events from the WebSocket with responsive shutdown.
 func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
-	// Set a short read timeout to make shutdown more responsive
-	readTimeout := 2 * time.Second
+	// Set read timeout to be longer than server ping interval (54s) to avoid false timeouts
+	// Server sends pings every 54s, so we should expect a message at least that often
+	readTimeout := 90 * time.Second
 
 	for {
 		// Check for context cancellation first
