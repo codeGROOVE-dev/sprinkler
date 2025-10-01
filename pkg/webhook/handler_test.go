@@ -74,4 +74,40 @@ func TestWebhookHandler(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
 	}
+
+	// Test check_suite event with PR number (no html_url)
+	checkSuitePayload := map[string]any{
+		"action": "completed",
+		"check_suite": map[string]any{
+			"pull_requests": []any{
+				map[string]any{
+					"number": float64(16),
+				},
+			},
+		},
+		"repository": map[string]any{
+			"html_url": "https://github.com/codeGROOVE-dev/slacker",
+		},
+	}
+
+	body, err = json.Marshal(checkSuitePayload)
+	if err != nil {
+		t.Fatalf("failed to marshal check_suite payload: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "check_suite") //nolint:canonicalheader // GitHub webhook header
+
+	// Add valid signature
+	mac = hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	signature = "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	req.Header.Set("X-Hub-Signature-256", signature)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d for check_suite, got %d", http.StatusOK, w.Code)
+	}
 }
