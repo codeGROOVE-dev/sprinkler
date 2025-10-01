@@ -57,13 +57,13 @@ func gitHubToken(flagToken string) (string, error) {
 
 func run() error {
 	var (
-		serverAddr  = flag.String("addr", "localhost:8080", "server address")
+		serverAddr  = flag.String("addr", client.DefaultServerAddress, "server address (hostname:port)")
 		org         = flag.String("org", "", "GitHub organization to subscribe to (use '*' for all your orgs)")
 		token       = flag.String("token", "", "GitHub personal access token")
 		userEvents  = flag.Bool("user", false, "Subscribe to your events across all organizations")
 		eventTypes  = flag.String("events", "", "Comma-separated list of event types to subscribe to (use '*' for all)")
 		prs         = flag.String("prs", "", "Comma-separated list of PR URLs to subscribe to (max 200)")
-		useTLS      = flag.Bool("tls", false, "Use TLS (wss://)")
+		insecure    = flag.Bool("insecure", false, "Use insecure WebSocket (ws:// instead of wss://)")
 		verbose     = flag.Bool("verbose", false, "Show full event details")
 		noReconnect = flag.Bool("no-reconnect", false, "Disable automatic reconnection")
 		maxRetries  = flag.Int("max-retries", 0, "Maximum reconnection attempts (0 = infinite)")
@@ -104,10 +104,11 @@ func run() error {
 		return err
 	}
 
-	// Build WebSocket URL
-	scheme := "ws"
-	if *useTLS {
-		scheme = "wss"
+	// Build WebSocket URL - secure by default
+	scheme := "wss"
+	if *insecure {
+		scheme = "ws"
+		log.Println("WARNING: Using insecure WebSocket connection (ws://)")
 	}
 	url := fmt.Sprintf("%s://%s/ws", scheme, *serverAddr)
 

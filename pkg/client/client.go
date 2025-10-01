@@ -26,6 +26,9 @@ func (e *AuthenticationError) Error() string {
 }
 
 const (
+	// DefaultServerAddress is the default webhook sprinkler server address.
+	DefaultServerAddress = "webhook.github.codegroove.app"
+
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	msgTypeField  = "type"
