@@ -13,15 +13,19 @@ import (
 
 // Client represents a connected WebSocket client with their subscription preferences.
 type Client struct {
-	conn         *websocket.Conn
-	send         chan Event
-	hub          *Hub
-	done         chan struct{}
-	userOrgs     map[string]bool
-	ID           string
-	subscription Subscription
-	closeOnce    sync.Once
-	pingSeq      int64 // Track ping sequence numbers
+	conn            *websocket.Conn
+	send            chan Event
+	hub             *Hub
+	done            chan struct{}
+	userOrgs        map[string]bool
+	ID              string
+	subscription    Subscription
+	lastPongTime    time.Time // Time of last pong
+	mu              sync.RWMutex
+	closeOnce       sync.Once
+	pingSeq         int64 // Track ping sequence numbers
+	lastPongSeq     int64 // Last pong sequence received
+	missedPongCount int   // Count of consecutive missed pongs
 }
 
 // NewClient creates a new client.
@@ -101,8 +105,27 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			log.Printf("✓ Event sent to client %s", c.ID)
 
 		case <-ticker.C:
+			// Check if we're missing pongs before sending next ping
+			c.mu.RLock()
+			currentSeq := c.pingSeq
+			lastPongSeq := c.lastPongSeq
+			c.mu.RUnlock()
+
+			if currentSeq > 0 && lastPongSeq < currentSeq {
+				c.mu.Lock()
+				c.missedPongCount++
+				missedCount := c.missedPongCount
+				c.mu.Unlock()
+				log.Printf("WARNING: client %s has not responded to ping #%d (missed %d consecutive pongs)",
+					c.ID, currentSeq, missedCount)
+			}
+
 			// Send ping to keep connection alive
+			c.mu.Lock()
 			c.pingSeq++
+			currentSeq = c.pingSeq
+			c.mu.Unlock()
+
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				log.Printf("error setting ping deadline for client %s: %v", c.ID, err)
 				return
@@ -110,7 +133,7 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			ping := map[string]any{
 				"type":      "ping",
 				"timestamp": time.Now().Format(time.RFC3339),
-				"seq":       c.pingSeq,
+				"seq":       currentSeq,
 			}
 			if err := websocket.JSON.Send(c.conn, ping); err != nil {
 				log.Printf("error sending ping to client %s: %v", c.ID, err)
@@ -123,6 +146,16 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			return
 		}
 	}
+}
+
+// RecordPong records receipt of a pong from the client.
+func (c *Client) RecordPong(seq int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.lastPongSeq = seq
+	c.lastPongTime = time.Now()
+	c.missedPongCount = 0
 }
 
 // Close gracefully closes the client.

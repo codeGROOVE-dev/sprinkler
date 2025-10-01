@@ -22,7 +22,7 @@ import (
 // Constants for WebSocket timeouts and limits.
 const (
 	pingInterval        = 54 * time.Second
-	readTimeout         = 60 * time.Second // Must be > pingInterval to avoid false timeouts
+	readTimeout         = 90 * time.Second // Must be > pingInterval + response time to avoid false timeouts
 	writeTimeout        = 10 * time.Second
 	minTokenLength      = 40   // Minimum GitHub token length
 	maxTokenLength      = 255  // Maximum GitHub token length
@@ -717,6 +717,9 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 				switch msgType {
 				case "pong":
 					// Pong received - connection is alive
+					if seq, ok := msgMap["seq"].(float64); ok {
+						client.RecordPong(int64(seq))
+					}
 					continue
 				case "ping":
 					// Client sent us a ping, send pong back
