@@ -22,7 +22,7 @@ import (
 // Constants for WebSocket timeouts and limits.
 const (
 	pingInterval        = 54 * time.Second
-	readDeadline        = 60 * time.Second
+	readTimeout         = 60 * time.Second // Must be > pingInterval to avoid false timeouts
 	writeTimeout        = 10 * time.Second
 	minTokenLength      = 40   // Minimum GitHub token length
 	maxTokenLength      = 255  // Maximum GitHub token length
@@ -376,22 +376,6 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	return userOrgs, nil
 }
 
-// handleClientPing responds to a ping message from the client.
-func (*WebSocketHandler) handleClientPing(ws *websocket.Conn, msgMap map[string]any, clientID string) {
-	pong := map[string]any{"type": "pong"}
-	// Echo back any sequence number if present
-	if seq, ok := msgMap["seq"]; ok {
-		pong["seq"] = seq
-	}
-	if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
-		log.Printf("failed to set write deadline for pong to client %s: %v", clientID, err)
-		return
-	}
-	if err := websocket.JSON.Send(ws, pong); err != nil {
-		log.Printf("failed to send pong to client %s: %v", clientID, err)
-	}
-}
-
 // Handle handles a WebSocket connection.
 //
 //nolint:funlen,gocyclo // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
@@ -495,7 +479,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	}
 	defer h.connLimiter.Remove(ip)
 
-	// Set read deadline for initial subscription
+	// Set read deadline for initial subscription (shorter timeout for handshake)
 	if err := ws.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		log.Printf("failed to set deadline for %s: %v", ip, err)
 		return
@@ -676,18 +660,15 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	go client.Run(ctx, pingInterval, writeTimeout)
 
 	// Handle incoming messages with responsive shutdown
-	// Use a shorter read timeout to make shutdown more responsive
-	readTimeout := 2 * time.Second
-
 	// Create a ticker for periodic context checks during blocking reads
 	contextCheckTicker := time.NewTicker(1 * time.Second)
 	defer contextCheckTicker.Stop()
 
+	// Set initial read deadline - must be longer than pingInterval to avoid false timeouts
 	if err := ws.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 		log.Printf("failed to set read deadline for %s: %v", ip, err)
 		return
 	}
-	// Read deadline set for responsive shutdown
 
 	// Message read loop with responsive shutdown
 	for {
@@ -717,7 +698,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 				log.Printf("client %s connection already closed", client.ID)
 			case strings.Contains(err.Error(), "i/o timeout"):
 				log.Printf("TIMEOUT: client %s read timeout at %s (no messages received for %v)",
-					client.ID, time.Now().Format(time.RFC3339), readDeadline)
+					client.ID, time.Now().Format(time.RFC3339), readTimeout)
 			default:
 				log.Printf("client %s read error: %v", client.ID, err)
 			}
@@ -739,7 +720,17 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 					continue
 				case "ping":
 					// Client sent us a ping, send pong back
-					h.handleClientPing(ws, msgMap, client.ID)
+					pong := map[string]any{"type": "pong"}
+					if seq, ok := msgMap["seq"]; ok {
+						pong["seq"] = seq
+					}
+					if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+						log.Printf("failed to set write deadline for pong to client %s: %v", client.ID, err)
+						continue
+					}
+					if err := websocket.JSON.Send(ws, pong); err != nil {
+						log.Printf("failed to send pong to client %s: %v", client.ID, err)
+					}
 					continue
 				case "keepalive", "heartbeat":
 					// Common keepalive messages - just acknowledge receipt

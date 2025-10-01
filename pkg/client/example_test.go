@@ -3,7 +3,6 @@ package client_test
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -81,7 +80,7 @@ func ExampleClient_gracefulShutdown() {
 
 func ExampleClient_customLogger() {
 	// Example 1: Silence all logs
-	silentLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silentLogger := slog.New(slog.DiscardHandler)
 
 	// Example 2: JSON logging to a file
 	logFile, err := os.Create("client.log")

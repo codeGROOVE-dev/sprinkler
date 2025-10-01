@@ -1,4 +1,5 @@
-#!/usr/bin/env bash -eux -o pipefail
+#!/usr/bin/env bash
+set -eux -o pipefail
 # Deploys Go program to Cloud Run - from cwd or arg[1].
 cd "${1:-.}"
 
@@ -10,7 +11,7 @@ SA="$APP@$PROJECT.iam.gserviceaccount.com"
 gcloud iam service-accounts describe "$SA" &>/dev/null ||
 	gcloud iam service-accounts create "$APP" --project="$PROJECT"
 
-grep -q gcr.io $HOME/.docker/config.json ||
+grep -q gcr.io "$HOME"/.docker/config.json ||
     gcloud auth configure-docker gcr.io
 
 KO_DOCKER_REPO="gcr.io/$PROJECT/$APP" ko publish . |

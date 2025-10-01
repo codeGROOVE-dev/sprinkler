@@ -1,4 +1,4 @@
-.PHONY: all build test lint clean fmt vet
+.PHONY: all build test lint clean fmt vet deploy
 
 all: fmt vet lint test build
 
@@ -24,6 +24,9 @@ run-server:
 
 run-client:
 	go run ./cmd/client
+
+deploy:
+	./hacks/deploy.sh cmd/server/
 # BEGIN: lint-install .
 # http://github.com/codeGROOVE-dev/lint-install
 
