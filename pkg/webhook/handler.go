@@ -138,12 +138,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	prURL := ExtractPRURL(eventType, payload)
 	if prURL == "" {
 		// Log full payload to understand the structure
-		payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
-		logger.Info("no PR URL found in event - full payload", logger.Fields{
-			"event_type":  eventType,
-			"delivery_id": deliveryID,
-			"payload":     string(payloadJSON),
-		})
+		payloadJSON, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			logger.Warn("failed to marshal payload for logging", logger.Fields{
+				"event_type":  eventType,
+				"delivery_id": deliveryID,
+				"error":       err.Error(),
+			})
+		} else {
+			logger.Info("no PR URL found in event - full payload", logger.Fields{
+				"event_type":  eventType,
+				"delivery_id": deliveryID,
+				"payload":     string(payloadJSON),
+			})
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}

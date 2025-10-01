@@ -48,18 +48,19 @@ func main() {
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Get webhook secret from flag or environment variable
 	webhookSecretValue := *webhookSecret
 
 	// Validate webhook secret is configured (REQUIRED for security)
 	if webhookSecretValue == "" {
+		cancel()
 		log.Fatal("ERROR: Webhook secret is required for security. Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable.")
 	}
 
 	// Validate allowed events is configured (REQUIRED)
 	if *allowedEvents == "" {
+		cancel()
 		log.Fatal("ERROR: Allowed events must be specified. Set -allowed-events or " +
 			"ALLOWED_WEBHOOK_EVENTS environment variable. Use '*' to allow all events.")
 	}
@@ -76,6 +77,9 @@ func main() {
 		}
 		log.Printf("Allowing webhook event types: %v", allowedEventTypes)
 	}
+
+	// Defer cancel after all fatal validations
+	defer cancel()
 
 	// CORS support removed - WebSocket clients should handle auth via Authorization header
 
