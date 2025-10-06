@@ -56,7 +56,7 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 	var user *User
 	var lastErr error
 
-	// Retry with exponential backoff and jitter for transient failures
+	// Retry with exponential backoff and full jitter for transient failures
 	err := retry.Do(
 		func() error {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", http.NoBody)
@@ -134,9 +134,8 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 			}
 		},
 		retry.Attempts(3),
-		retry.DelayType(retry.BackOffDelay),
+		retry.DelayType(retry.FullJitterBackoffDelay),
 		retry.MaxDelay(2*time.Minute),
-		retry.MaxJitter(time.Second),
 		retry.Context(ctx),
 	)
 	if err != nil {
@@ -250,9 +249,8 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 			}
 		},
 		retry.Attempts(3),
-		retry.DelayType(retry.BackOffDelay),
+		retry.DelayType(retry.FullJitterBackoffDelay),
 		retry.MaxDelay(2*time.Minute),
-		retry.MaxJitter(time.Second),
 		retry.Context(ctx),
 	)
 	if err != nil {
@@ -413,9 +411,8 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 			}
 		},
 		retry.Attempts(3),
-		retry.DelayType(retry.BackOffDelay),
+		retry.DelayType(retry.FullJitterBackoffDelay),
 		retry.MaxDelay(2*time.Minute),
-		retry.MaxJitter(time.Second),
 		retry.Context(ctx),
 	)
 	if err != nil {
