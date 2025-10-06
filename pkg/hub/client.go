@@ -59,14 +59,12 @@ func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, user
 // Run handles sending events to the client and periodic pings.
 // Context should be passed from the caller for proper lifecycle management.
 func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Duration) {
-	ticker := time.NewTicker(pingInterval)
-	defer func() {
-		ticker.Stop()
-		// Don't close the websocket here - let the main handler do it
-		// This prevents double-close errors
-		c.Close()
-	}()
+	defer c.Close()
 
+	// Start ping sender in separate goroutine to prevent event sends from blocking pings
+	go c.sendPings(ctx, pingInterval, writeTimeout)
+
+	// Handle event sending in main goroutine
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,6 +102,24 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 
 			log.Printf("✓ Event sent to client %s", c.ID)
 
+		case <-c.done:
+			log.Printf("client %s: done signal received", c.ID)
+			return
+		}
+	}
+}
+
+// sendPings sends periodic pings in a separate goroutine to prevent blocking by event sends.
+func (c *Client) sendPings(ctx context.Context, pingInterval, writeTimeout time.Duration) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
 		case <-ticker.C:
 			// Check if we're missing pongs before sending next ping
 			c.mu.RLock()
@@ -139,11 +155,6 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				log.Printf("error sending ping to client %s: %v", c.ID, err)
 				return
 			}
-			// Ping sent to keep connection alive
-
-		case <-c.done:
-			log.Printf("client %s: done signal received", c.ID)
-			return
 		}
 	}
 }
