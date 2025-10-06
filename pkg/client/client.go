@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codeGROOVE-dev/retry"
 	"golang.org/x/net/websocket"
 )
 
@@ -36,6 +37,10 @@ const (
 	// Server ping timing constants.
 	expectedPingInterval = 54 * time.Second
 	pingDelayThreshold   = 10 * time.Second
+
+	// Read timeout for WebSocket operations.
+	// Set to 90s to be longer than server ping interval (54s) to avoid false timeouts.
+	readTimeout = 90 * time.Second
 )
 
 // Event represents a webhook event received from the server.
@@ -118,33 +123,28 @@ func New(config Config) (*Client, error) {
 func (c *Client) Start(ctx context.Context) error {
 	defer close(c.stoppedCh)
 
-	for {
-		select {
-		case <-ctx.Done():
-			c.logger.Info("Client context cancelled, shutting down")
-			return ctx.Err()
-		case <-c.stopCh:
-			c.logger.Info("Client stop requested")
-			return nil
-		default:
-		}
+	// Create retry options
+	retryOpts := []retry.Option{
+		retry.Context(ctx),
+		retry.DelayType(retry.FullJitterBackoffDelay),
+		retry.MaxDelay(c.config.MaxBackoff),
+		retry.OnRetry(func(n uint, err error) {
+			c.mu.Lock()
+			//nolint:gosec // Retry count will not overflow in practice
+			c.retries = int(n)
+			c.mu.Unlock()
 
-		// Connection attempt logging
-		if c.retries == 0 {
-			c.logger.Info("========================================")
-			c.logger.Info("CONNECTING to WebSocket server", "url", c.config.ServerURL)
-			c.logger.Info("========================================")
-		} else {
-			c.logger.Info("========================================")
-			c.logger.Info("RECONNECTING to WebSocket server", "url", c.config.ServerURL, "attempt", c.retries)
-			c.logger.Info("========================================")
-		}
+			c.logger.Warn(separatorLine)
+			c.logger.Warn("WebSocket CONNECTION LOST!", "error", err, "events_received", c.eventCount, "attempt", n+1)
+			c.logger.Warn(separatorLine)
 
-		// Try to connect
-		err := c.connect(ctx)
-		// Handle connection result
-		if err != nil {
-			// Check if it's an authentication error - don't retry these
+			// Notify disconnect callback
+			if c.config.OnDisconnect != nil {
+				c.config.OnDisconnect(err)
+			}
+		}),
+		retry.RetryIf(func(err error) bool {
+			// Don't retry authentication errors
 			var authErr *AuthenticationError
 			if errors.As(err, &authErr) {
 				c.logger.Error(separatorLine)
@@ -154,51 +154,63 @@ func (c *Client) Start(ctx context.Context) error {
 				c.logger.Error("- Not being a member of the requested organization")
 				c.logger.Error("- Insufficient permissions")
 				c.logger.Error(separatorLine)
-				return err
+				return false
 			}
 
-			c.logger.Warn(separatorLine)
-			c.logger.Warn("WebSocket CONNECTION LOST!", "error", err, "events_received", c.eventCount)
-			c.logger.Warn(separatorLine)
-
-			// Notify disconnect callback
-			if c.config.OnDisconnect != nil {
-				c.config.OnDisconnect(err)
-			}
-
-			// Check if reconnection is disabled
+			// Don't retry if reconnection is disabled
 			if c.config.NoReconnect {
-				return fmt.Errorf("connection failed and reconnection disabled: %w", err)
+				return false
 			}
 
-			// Check retry limit
-			c.retries++
-			if c.config.MaxRetries > 0 && c.retries > c.config.MaxRetries {
-				c.logger.Error("Exceeded maximum retry attempts. Giving up.", "max_retries", c.config.MaxRetries)
-				return fmt.Errorf("exceeded maximum retry attempts (%d)", c.config.MaxRetries)
-			}
-
-			// Calculate backoff delay
-			delay := time.Duration(c.retries) * time.Second
-			if delay > c.config.MaxBackoff {
-				delay = c.config.MaxBackoff
-			}
-
-			c.logger.Info("Will attempt to reconnect", "delay_seconds", delay.Seconds())
-			c.logger.Info("Press Ctrl+C to exit")
-
-			// Wait before reconnecting
+			// Don't retry if stop was requested
 			select {
-			case <-time.After(delay):
-				c.logger.Info("Reconnection delay elapsed, attempting to reconnect")
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
 			case <-c.stopCh:
-				return nil
+				return false
+			default:
+				return true
 			}
-		}
+		}),
 	}
+
+	// Configure retry attempts
+	if c.config.MaxRetries > 0 {
+		//nolint:gosec // MaxRetries is a user-configured value, overflow not a concern
+		retryOpts = append(retryOpts, retry.Attempts(uint(c.config.MaxRetries)))
+	} else {
+		retryOpts = append(retryOpts, retry.UntilSucceeded())
+	}
+
+	// Use retry library to handle reconnection with exponential backoff and jitter
+	return retry.Do(func() error {
+		// Check for early cancellation - don't retry on shutdown
+		select {
+		case <-ctx.Done():
+			c.logger.Info("Client context cancelled, shutting down")
+			return retry.Unrecoverable(ctx.Err())
+		case <-c.stopCh:
+			c.logger.Info("Client stop requested")
+			return retry.Unrecoverable(errors.New("stop requested"))
+		default:
+		}
+
+		// Connection attempt logging
+		c.mu.RLock()
+		n := c.retries
+		c.mu.RUnlock()
+
+		if n == 0 {
+			c.logger.Info("========================================")
+			c.logger.Info("CONNECTING to WebSocket server", "url", c.config.ServerURL)
+			c.logger.Info("========================================")
+		} else {
+			c.logger.Info("========================================")
+			c.logger.Info("RECONNECTING to WebSocket server", "url", c.config.ServerURL, "attempt", n)
+			c.logger.Info("========================================")
+		}
+
+		// Try to connect - this will run indefinitely if successful
+		return c.connect(ctx)
+	}, retryOpts...)
 }
 
 // Stop gracefully stops the client.
@@ -242,7 +254,10 @@ func (c *Client) connect(ctx context.Context) error {
 			// Extract status code if present
 			if strings.Contains(errStr, "403") || strings.Contains(errLower, "forbidden") {
 				return &AuthenticationError{
-					message: fmt.Sprintf("Authentication failed (403 Forbidden): Check your GitHub token and organization membership. Original error: %v", err),
+					message: fmt.Sprintf(
+						"Authentication failed (403 Forbidden): Check your GitHub token and organization membership. Original error: %v",
+						err,
+					),
 				}
 			}
 			if strings.Contains(errStr, "401") || strings.Contains(errLower, "unauthorized") {
@@ -320,21 +335,12 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 
 	// Check response type
-	responseType := ""
-	if t, ok := firstResponse[msgTypeField].(string); ok {
-		responseType = t
-	}
+	responseType, _ := firstResponse[msgTypeField].(string) //nolint:errcheck // type assertion, not error
 
 	// Handle error response
 	if responseType == "error" {
-		errorCode := ""
-		if code, ok := firstResponse["error"].(string); ok {
-			errorCode = code
-		}
-		message := ""
-		if msg, ok := firstResponse["message"].(string); ok {
-			message = msg
-		}
+		errorCode, _ := firstResponse["error"].(string)     //nolint:errcheck // type assertion, not error
+		message, _ := firstResponse["message"].(string)     //nolint:errcheck // type assertion, not error
 		c.logger.Error(separatorLine)
 		c.logger.Error("SUBSCRIPTION REJECTED BY SERVER!", "error_code", errorCode, "message", message)
 		c.logger.Error(separatorLine)
@@ -384,7 +390,9 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 
 	// Reset retry counter on successful connection
+	c.mu.Lock()
 	c.retries = 0
+	c.mu.Unlock()
 
 	// Start ping sender
 	pingCtx, cancelPing := context.WithCancel(ctx)
@@ -423,10 +431,6 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 
 // readEvents reads and processes events from the WebSocket with responsive shutdown.
 func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
-	// Set read timeout to be longer than server ping interval (54s) to avoid false timeouts
-	// Server sends pings every 54s, so we should expect a message at least that often
-	readTimeout := 90 * time.Second
-
 	for {
 		// Check for context cancellation first
 		select {
@@ -470,10 +474,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		}
 
 		// Check message type
-		responseType := ""
-		if t, ok := response[msgTypeField].(string); ok {
-			responseType = t
-		}
+		responseType, _ := response[msgTypeField].(string) //nolint:errcheck // type assertion, not error
 
 		// Handle ping messages
 		if responseType == "ping" {
