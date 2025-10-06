@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -25,7 +26,9 @@ const (
 	readTimeout    = 10 * time.Second
 	writeTimeout   = 10 * time.Second
 	idleTimeout    = 120 * time.Second
-	maxHeaderBytes = 20 // Max header size multiplier (1 << 20 = 1MB)
+	maxHeaderBytes = 20  // Max header size multiplier (1 << 20 = 1MB)
+	minTokenLength = 40  // Minimum GitHub token length
+	maxTokenLength = 255 // Maximum GitHub token length
 )
 
 var (
@@ -192,7 +195,32 @@ func main() {
 		// Pre-validate authentication before WebSocket upgrade
 		authHeader := r.Header.Get("Authorization")
 		if !wsHandler.PreValidateAuth(r) {
-			log.Printf("WebSocket 403: auth failed ip=%s auth_header=%q", ip, authHeader)
+			// Determine specific failure reason for better debugging
+			reason := "missing"
+			if authHeader != "" {
+				if !strings.HasPrefix(authHeader, "Bearer ") {
+					reason = "invalid_format"
+				} else {
+					token := strings.TrimPrefix(authHeader, "Bearer ")
+					if len(token) < minTokenLength || len(token) > maxTokenLength {
+						reason = fmt.Sprintf("invalid_length_%d", len(token))
+					} else {
+						reason = "invalid_pattern"
+					}
+				}
+			}
+
+			// Mask token for security (show only length and prefix if present)
+			authHeaderLog := "missing"
+			if authHeader != "" {
+				if len(authHeader) > 20 {
+					authHeaderLog = fmt.Sprintf("Bearer [REDACTED len=%d]", len(authHeader)-7)
+				} else {
+					authHeaderLog = "[REDACTED]"
+				}
+			}
+
+			log.Printf("WebSocket 403: auth failed ip=%s reason=%s auth_header=%q", ip, reason, authHeaderLog)
 			w.WriteHeader(http.StatusForbidden)
 			msg := "403 Forbidden: Invalid or missing GitHub token. " +
 				"Please provide a valid token in the Authorization header as 'Bearer <token>'\n"

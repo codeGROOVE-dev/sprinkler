@@ -3,7 +3,6 @@ package hub
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -219,17 +218,38 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 				if len(githubToken) >= tokenPrefixLength {
 					tokenPrefix = githubToken[:tokenPrefixLength]
 				}
+
+				// Determine specific error reason for better diagnostics
+				errorMsg := "Authentication failed."
+
+				errStr := err.Error()
+				var errorReason string
+				switch {
+				case strings.Contains(errStr, "invalid GitHub token"):
+					errorMsg = "Invalid GitHub token."
+					errorReason = "invalid_token"
+				case strings.Contains(errStr, "access forbidden"):
+					errorMsg = "Access forbidden. Check token permissions."
+					errorReason = "forbidden"
+				case strings.Contains(errStr, "rate limit"):
+					errorMsg = "GitHub API rate limit exceeded. Try again later."
+					errorReason = "rate_limit"
+				default:
+					errorReason = errStr
+				}
+
 				logger.Error("GitHub auth failed for wildcard org subscription", err, logger.Fields{
 					"ip":           ip,
 					"token_prefix": tokenPrefix,
 					"token_length": len(githubToken),
+					"reason":       errorReason,
 				})
 
 				// Send error response to client
 				errorResp := map[string]string{
 					"type":    "error",
 					"error":   "authentication_failed",
-					"message": "Authentication failed.",
+					"message": errorMsg,
 				}
 
 				// Set a write deadline to ensure we don't hang forever
@@ -243,8 +263,11 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 					return nil, sendErr
 				}
 
-				logger.Info("sent authentication error to client", logger.Fields{"ip": ip})
-				return nil, errors.New("authentication failed")
+				logger.Info("sent authentication error to client", logger.Fields{
+					"ip":     ip,
+					"reason": errorReason,
+				})
+				return nil, fmt.Errorf("authentication failed: %s: %w", errorReason, err)
 			}
 
 			logger.Info("GitHub authentication successful for wildcard org subscription", logger.Fields{
@@ -271,18 +294,47 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 			if len(githubToken) >= tokenPrefixLength {
 				tokenPrefix = githubToken[:tokenPrefixLength]
 			}
+
+			// Determine specific error reason for better diagnostics
+			errorCode := "access_denied"
+			errorMsg := "Access denied."
+
+			errStr := err.Error()
+			var errorReason string
+			switch {
+			case strings.Contains(errStr, "invalid GitHub token"):
+				errorCode = "authentication_failed"
+				errorMsg = "Invalid GitHub token."
+				errorReason = "invalid_token"
+			case strings.Contains(errStr, "access forbidden"):
+				errorCode = "access_denied"
+				errorMsg = "Access forbidden. Check token permissions."
+				errorReason = "forbidden"
+			case strings.Contains(errStr, "not a member"):
+				errorCode = "access_denied"
+				errorMsg = fmt.Sprintf("You are not a member of organization '%s'.", sub.Organization)
+				errorReason = "not_org_member"
+			case strings.Contains(errStr, "rate limit"):
+				errorCode = "rate_limit_exceeded"
+				errorMsg = "GitHub API rate limit exceeded. Try again later."
+				errorReason = "rate_limit"
+			default:
+				errorReason = errStr
+			}
+
 			logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
 				"ip":           ip,
 				"org":          sub.Organization,
 				"token_prefix": tokenPrefix,
 				"token_length": len(githubToken),
+				"reason":       errorReason,
 			})
 
 			// Send error response to client
 			errorResp := map[string]string{
 				"type":    "error",
-				"error":   "access_denied",
-				"message": "Access denied.",
+				"error":   errorCode,
+				"message": errorMsg,
 			}
 
 			// Set a write deadline to ensure we don't hang forever
@@ -296,8 +348,13 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 				return nil, sendErr
 			}
 
-			logger.Info("sent access denied error to client", logger.Fields{"ip": ip, "org": sub.Organization})
-			return nil, errors.New("access denied")
+			logger.Info("sent error to client", logger.Fields{
+				"ip":           ip,
+				"org":          sub.Organization,
+				"error_code":   errorCode,
+				"error_reason": errorReason,
+			})
+			return nil, fmt.Errorf("%s: %w", errorReason, err)
 		}
 
 		logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
@@ -326,17 +383,38 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 		if len(githubToken) >= tokenPrefixLength {
 			tokenPrefix = githubToken[:tokenPrefixLength]
 		}
+
+		// Determine specific error reason for better diagnostics
+		errorMsg := "Authentication failed. Please check your GitHub token."
+
+		errStr := err.Error()
+		var errorReason string
+		switch {
+		case strings.Contains(errStr, "invalid GitHub token"):
+			errorMsg = "Invalid GitHub token."
+			errorReason = "invalid_token"
+		case strings.Contains(errStr, "access forbidden"):
+			errorMsg = "Access forbidden. Check token permissions."
+			errorReason = "forbidden"
+		case strings.Contains(errStr, "rate limit"):
+			errorMsg = "GitHub API rate limit exceeded. Try again later."
+			errorReason = "rate_limit"
+		default:
+			errorReason = errStr
+		}
+
 		logger.Error("GitHub auth failed (no specific org)", err, logger.Fields{
 			"ip":           ip,
 			"token_prefix": tokenPrefix,
 			"token_length": len(githubToken),
+			"reason":       errorReason,
 		})
 
 		// Send error response to client
 		errorResp := map[string]string{
 			"type":    "error",
 			"error":   "authentication_failed",
-			"message": "Authentication failed. Please check your GitHub token.",
+			"message": errorMsg,
 		}
 
 		// Set a write deadline to ensure we don't hang forever
@@ -350,8 +428,11 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 			return nil, sendErr
 		}
 
-		logger.Info("sent authentication error to client", logger.Fields{"ip": ip})
-		return nil, errors.New("authentication failed")
+		logger.Info("sent authentication error to client", logger.Fields{
+			"ip":     ip,
+			"reason": errorReason,
+		})
+		return nil, fmt.Errorf("authentication failed: %s: %w", errorReason, err)
 	}
 
 	logger.Info("GitHub authentication successful", logger.Fields{

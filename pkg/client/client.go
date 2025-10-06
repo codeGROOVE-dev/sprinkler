@@ -235,6 +235,22 @@ func (c *Client) connect(ctx context.Context) error {
 	// Dial the server
 	ws, err := websocket.DialConfig(wsConfig)
 	if err != nil {
+		// Check for HTTP status codes in the error message
+		errStr := err.Error()
+		if strings.Contains(errStr, "bad status") {
+			errLower := strings.ToLower(errStr)
+			// Extract status code if present
+			if strings.Contains(errStr, "403") || strings.Contains(errLower, "forbidden") {
+				return &AuthenticationError{
+					message: fmt.Sprintf("Authentication failed (403 Forbidden): Check your GitHub token and organization membership. Original error: %v", err),
+				}
+			}
+			if strings.Contains(errStr, "401") || strings.Contains(errLower, "unauthorized") {
+				return &AuthenticationError{
+					message: fmt.Sprintf("Authentication failed (401 Unauthorized): Invalid or missing token. Original error: %v", err),
+				}
+			}
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
 	c.logger.Info("✓ WebSocket connection ESTABLISHED successfully!")
