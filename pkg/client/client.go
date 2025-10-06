@@ -339,8 +339,8 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Handle error response
 	if responseType == "error" {
-		errorCode, _ := firstResponse["error"].(string)     //nolint:errcheck // type assertion, not error
-		message, _ := firstResponse["message"].(string)     //nolint:errcheck // type assertion, not error
+		errorCode, _ := firstResponse["error"].(string) //nolint:errcheck // type assertion, not error
+		message, _ := firstResponse["message"].(string) //nolint:errcheck // type assertion, not error
 		c.logger.Error(separatorLine)
 		c.logger.Error("SUBSCRIPTION REJECTED BY SERVER!", "error_code", errorCode, "message", message)
 		c.logger.Error(separatorLine)
