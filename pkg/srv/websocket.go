@@ -312,7 +312,17 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 				errorReason = "forbidden"
 			case strings.Contains(errStr, "not a member"):
 				errorCode = "access_denied"
-				errorMsg = fmt.Sprintf("You are not a member of organization '%s'.", sub.Organization)
+				// Include username/app identifier in error message
+				if username != "" {
+					if len(userOrgs) > 0 {
+						errorMsg = fmt.Sprintf("User '%s' is not a member of organization '%s'. Member of: %s",
+							username, sub.Organization, strings.Join(userOrgs, ", "))
+					} else {
+						errorMsg = fmt.Sprintf("User '%s' is not a member of organization '%s'.", username, sub.Organization)
+					}
+				} else {
+					errorMsg = fmt.Sprintf("You are not a member of organization '%s'.", sub.Organization)
+				}
 				errorReason = "not_org_member"
 			case strings.Contains(errStr, "rate limit"):
 				errorCode = "rate_limit_exceeded"
@@ -325,6 +335,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 			logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
 				"ip":           ip,
 				"org":          sub.Organization,
+				"username":     username,
 				"token_prefix": tokenPrefix,
 				"token_length": len(githubToken),
 				"reason":       errorReason,

@@ -298,9 +298,9 @@ func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []strin
 			log.Printf("GitHub API: SUCCESS - App installation token authenticated for organization: %s", installation.Account.Login)
 			return "app[installation]", []string{installation.Account.Login}, nil
 		}
-		// App installed on user account
+		// App installed on user account - treat the personal account as an "org" for subscription purposes
 		log.Printf("GitHub API: SUCCESS - App installation token authenticated for user account: %s", installation.Account.Login)
-		return "app[installation]", []string{}, nil
+		return "app[installation]", []string{installation.Account.Login}, nil
 	}
 	log.Printf("GitHub API: Token did not work with /installation/repositories (error: %v), trying /user endpoint...", appErr)
 
@@ -461,5 +461,5 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (usernam
 	// User is not a member of the requested organization
 	log.Printf("GitHub API: User '%s' is NOT a member of organization '%s'", username, org)
 	log.Printf("GitHub API: User is member of %d organizations: %v", len(orgNames), orgNames)
-	return "", nil, errors.New("user is not a member of the requested organization")
+	return username, orgNames, errors.New("user is not a member of the requested organization")
 }
