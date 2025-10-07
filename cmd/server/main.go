@@ -17,8 +17,8 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/websocket"
 
-	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/security"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/srv"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/webhook"
 )
 
@@ -86,7 +86,7 @@ func main() {
 
 	// CORS support removed - WebSocket clients should handle auth via Authorization header
 
-	h := hub.NewHub()
+	h := srv.NewHub()
 	go h.Run(ctx)
 
 	// Create security components
@@ -146,7 +146,7 @@ func main() {
 	log.Println("Registered webhook handler at /webhook")
 
 	// WebSocket handler - exact match
-	wsHandler := hub.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
+	wsHandler := srv.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
 		ip := security.ClientIP(r)
@@ -272,7 +272,7 @@ func main() {
 		signal.Notify(sigint, os.Interrupt)
 		<-sigint
 
-		log.Println("shutting down server...")
+		log.Println("shutting down srv...")
 
 		// Cancel the context to stop all components
 		cancel()

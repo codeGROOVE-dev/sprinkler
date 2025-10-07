@@ -14,22 +14,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/srv"
 )
 
 const maxPayloadSize = 1 << 20 // 1MB
 
 // Handler handles GitHub webhook events.
 type Handler struct {
-	hub              *hub.Hub
+	hub              *srv.Hub
 	allowedEventsMap map[string]bool
 	secret           string
 	allowedEvents    []string
 }
 
 // NewHandler creates a new webhook handler.
-func NewHandler(h *hub.Hub, secret string, allowedEvents []string) *Handler {
+func NewHandler(h *srv.Hub, secret string, allowedEvents []string) *Handler {
 	// Build map for O(1) event type lookups
 	var allowedMap map[string]bool
 	if allowedEvents != nil {
@@ -158,7 +158,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create and broadcast event
-	event := hub.Event{
+	event := srv.Event{
 		URL:       prURL,
 		Timestamp: time.Now(),
 		Type:      eventType,

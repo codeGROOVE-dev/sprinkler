@@ -1,6 +1,6 @@
-// Package hub provides a WebSocket hub for managing client connections and broadcasting
+// Package srv provides a WebSocket hub for managing client connections and broadcasting
 // GitHub webhook events to subscribed clients based on their subscription criteria.
-package hub
+package srv
 
 import (
 	"context"

@@ -11,14 +11,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/codeGROOVE-dev/sprinkler/pkg/hub"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/srv"
 )
 
 func TestWebhookHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := hub.NewHub()
+	h := srv.NewHub()
 	go h.Run(ctx)
 
 	secret := "testsecret"
@@ -36,7 +36,7 @@ func TestWebhookHandler(t *testing.T) {
 	payload := map[string]any{
 		"action": "opened",
 		"pull_request": map[string]any{
-			"html_url": "https://github.com/user/repo/pull/1",
+			"html_url": "https://gitsrv.com/user/repo/pull/1",
 			"user": map[string]any{
 				"login": "testuser",
 			},
@@ -86,7 +86,7 @@ func TestWebhookHandler(t *testing.T) {
 			},
 		},
 		"repository": map[string]any{
-			"html_url": "https://github.com/codeGROOVE-dev/slacker",
+			"html_url": "https://gitsrv.com/codeGROOVE-dev/slacker",
 		},
 	}
 
