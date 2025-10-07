@@ -34,13 +34,12 @@ const (
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	msgTypeField  = "type"
 
-	// Server ping timing constants.
-	expectedPingInterval = 54 * time.Second
-	pingDelayThreshold   = 10 * time.Second
-
 	// Read timeout for WebSocket operations.
 	// Set to 90s to be longer than server ping interval (54s) to avoid false timeouts.
 	readTimeout = 90 * time.Second
+
+	// Write channel buffer size.
+	writeChannelBuffer = 10
 )
 
 // Event represents a webhook event received from the server.
@@ -71,17 +70,22 @@ type Config struct {
 }
 
 // Client represents a WebSocket client with automatic reconnection.
+// Connection management:
+//   - Read loop (readEvents) receives all messages from server
+//   - Write channel (writeCh) serializes all writes through one goroutine
+//   - Server sends pings; client responds with pongs
+//   - Client also sends pings; server responds with pongs
+//   - Both sides use read timeouts to detect dead connections
 type Client struct {
-	logger          *slog.Logger
-	ws              *websocket.Conn
-	stopCh          chan struct{}
-	stoppedCh       chan struct{}
-	config          Config
-	lastPingTime    time.Time // Time of last ping received
-	noActivitySince time.Time // Track when we last received anything
-	mu              sync.RWMutex
-	eventCount      int
-	retries         int
+	logger     *slog.Logger
+	ws         *websocket.Conn
+	stopCh     chan struct{}
+	stoppedCh  chan struct{}
+	config     Config
+	writeCh    chan any // Channel for serializing all writes
+	mu         sync.RWMutex
+	eventCount int
+	retries    int
 }
 
 // New creates a new robust WebSocket client.
@@ -102,7 +106,7 @@ func New(config Config) (*Client, error) {
 		config.PingInterval = 30 * time.Second
 	}
 	if config.MaxBackoff == 0 {
-		config.MaxBackoff = 30 * time.Second
+		config.MaxBackoff = 2 * time.Minute // Use exponential backoff up to 2 minutes
 	}
 
 	// Set default logger if not provided
@@ -394,21 +398,70 @@ func (c *Client) connect(ctx context.Context) error {
 	c.retries = 0
 	c.mu.Unlock()
 
-	// Start ping sender
+	// Create write channel for serializing all writes
+	c.writeCh = make(chan any, writeChannelBuffer)
+
+	// Start write pump - this is the ONLY goroutine that writes to the websocket
+	writeCtx, cancelWrite := context.WithCancel(ctx)
+	defer cancelWrite()
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- c.writePump(writeCtx, ws)
+	}()
+
+	// Start ping sender (sends to write channel, not directly to websocket)
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
-	go c.sendPings(pingCtx, ws)
+	go c.sendPings(pingCtx)
 
-	// Don't process subscription_confirmed as an event
-	// We've already handled it above
+	// Read events - when this returns, cancel everything
+	readErr := c.readEvents(ctx, ws)
 
-	// Read remaining events
-	return c.readEvents(ctx, ws)
+	// Stop write pump and ping sender
+	cancelWrite()
+	cancelPing()
+
+	// Wait for write pump to finish
+	writeErr := <-writeDone
+
+	// Return the first error that occurred
+	if readErr != nil {
+		return readErr
+	}
+	return writeErr
+}
+
+// writePump is the ONLY goroutine that writes to the websocket.
+// All writes must go through the writeCh channel to prevent concurrent writes.
+func (c *Client) writePump(ctx context.Context, ws *websocket.Conn) error {
+	const writeTimeout = 10 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case msg, ok := <-c.writeCh:
+			if !ok {
+				return errors.New("write channel closed")
+			}
+
+			// Set write deadline
+			if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+				return fmt.Errorf("set write deadline: %w", err)
+			}
+
+			// Send message
+			if err := websocket.JSON.Send(ws, msg); err != nil {
+				return fmt.Errorf("write: %w", err)
+			}
+		}
+	}
 }
 
 // sendPings sends periodic ping messages to keep the connection alive.
-// The server will respond with pings too, and we respond with pongs in readEvents.
-func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
+// Pings are sent to the write channel, not directly to the websocket.
+func (c *Client) sendPings(ctx context.Context) {
 	ticker := time.NewTicker(c.config.PingInterval)
 	defer ticker.Stop()
 
@@ -417,14 +470,18 @@ func (c *Client) sendPings(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			ping := map[string]string{msgTypeField: "ping", "timestamp": time.Now().Format(time.RFC3339)}
-			c.logger.Debug("[KEEP-ALIVE] Sending periodic ping to server")
-			if err := websocket.JSON.Send(ws, ping); err != nil {
-				c.logger.Error("Failed to send keep-alive ping", "error", err)
-				c.logger.Warn("Connection may be broken!")
+			ping := map[string]string{msgTypeField: "ping"}
+			c.logger.Debug("[PING] Sending periodic ping to server")
+
+			// Send to write channel (non-blocking)
+			select {
+			case c.writeCh <- ping:
+				c.logger.Debug("[PING] ✓ Ping queued")
+			case <-ctx.Done():
 				return
+			default:
+				c.logger.Warn("[PING] Write channel full, skipping ping")
 			}
-			c.logger.Debug("[KEEP-ALIVE] ✓ Ping sent successfully")
 		}
 	}
 }
@@ -476,63 +533,34 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		// Check message type
 		responseType, _ := response[msgTypeField].(string) //nolint:errcheck // type assertion, not error
 
-		// Handle ping messages
+		// Handle ping messages from server
 		if responseType == "ping" {
-			now := time.Now()
+			c.logger.Debug("[PONG] Received PING from server")
 
-			// Check if pings are arriving on schedule
-			c.mu.Lock()
-			lastPing := c.lastPingTime
-			c.lastPingTime = now
-			c.noActivitySince = now
-			c.mu.Unlock()
-
-			if !lastPing.IsZero() {
-				timeSinceLastPing := now.Sub(lastPing)
-				if timeSinceLastPing > expectedPingInterval+pingDelayThreshold {
-					c.logger.Warn("[PING-PONG] Delayed ping from server",
-						"expected_interval", expectedPingInterval,
-						"actual_interval", timeSinceLastPing,
-						"delay", timeSinceLastPing-expectedPingInterval)
-				}
-			}
-
-			c.logger.Debug("[PING-PONG] Received PING from server")
+			// Build pong response
 			pong := map[string]any{msgTypeField: "pong"}
-			// Echo back any sequence number if present
 			if seq, ok := response["seq"]; ok {
 				pong["seq"] = seq
 			}
-			// Set write deadline to ensure timely pong response
-			if err := ws.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				c.logger.Error("[PING-PONG] Failed to set write deadline", "error", err)
-				return fmt.Errorf("error setting write deadline: %w", err)
+
+			// Send pong via write channel (non-blocking with timeout)
+			select {
+			case c.writeCh <- pong:
+				c.logger.Debug("[PONG] Sent PONG response to server", "seq", pong["seq"])
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(1 * time.Second):
+				c.logger.Error("[PONG] Failed to queue pong - write channel blocked")
+				return errors.New("pong send blocked")
 			}
-			if err := websocket.JSON.Send(ws, pong); err != nil {
-				c.logger.Error("[PING-PONG] Failed to send PONG response", "error", err)
-				return fmt.Errorf("error sending pong response: %w", err)
-			}
-			// Clear write deadline
-			if err := ws.SetWriteDeadline(time.Time{}); err != nil {
-				c.logger.Warn("[PING-PONG] Failed to clear write deadline", "error", err)
-			}
-			c.logger.Debug("[PING-PONG] Sent PONG response to server", "seq", pong["seq"])
 			continue
 		}
 
-		// Handle pong acknowledgments
+		// Handle pong acknowledgments from server
 		if responseType == "pong" {
-			c.mu.Lock()
-			c.noActivitySince = time.Now()
-			c.mu.Unlock()
-			c.logger.Debug("[PING-PONG] Received PONG acknowledgment from server")
+			c.logger.Debug("[PONG] Received PONG acknowledgment from server")
 			continue
 		}
-
-		// Update activity timestamp for any event
-		c.mu.Lock()
-		c.noActivitySince = time.Now()
-		c.mu.Unlock()
 
 		// Process the event inline
 		event := Event{
