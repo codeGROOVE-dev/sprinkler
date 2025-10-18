@@ -761,9 +761,8 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 				switch msgType {
 				case "pong":
 					// Pong received - connection is alive
-					if seq, ok := msgMap["seq"].(float64); ok {
-						client.RecordPong(int64(seq))
-					}
+					// No explicit tracking needed: the read loop's deadline reset
+					// (which happens for ANY message including pong) keeps the connection alive
 					continue
 				case "ping":
 					// Client sent us a ping, send pong back

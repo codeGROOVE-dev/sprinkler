@@ -173,18 +173,6 @@ func parsePRUrl(prURL string) (*prURLInfo, error) {
 
 // Helper functions to reduce cognitive complexity.
 
-func matchesEventType(sub Subscription, eventType string) bool {
-	if len(sub.EventTypes) == 0 {
-		return true // No filter means all events
-	}
-	for _, allowedType := range sub.EventTypes {
-		if eventType == allowedType {
-			return true
-		}
-	}
-	return false
-}
-
 func extractEventOrg(payload map[string]any) string {
 	// Check repository owner first
 	if repo, ok := payload["repository"].(map[string]any); ok {
@@ -254,8 +242,17 @@ func matchesPRSubscription(sub Subscription, payload map[string]any, eventOrg st
 
 func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
 	// Check if event type matches subscription
-	if !matchesEventType(sub, event.Type) {
-		return false
+	if len(sub.EventTypes) > 0 {
+		found := false
+		for _, allowedType := range sub.EventTypes {
+			if event.Type == allowedType {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 	}
 
 	// Extract the organization from the event
@@ -310,18 +307,6 @@ func matchesUserInObject(user map[string]any, username string) bool {
 	return ok && strings.EqualFold(login, username)
 }
 
-// matchesUserInList checks if username matches any login in a list of user objects.
-func matchesUserInList(users []any, username string) bool {
-	for _, item := range users {
-		if user, ok := item.(map[string]any); ok {
-			if matchesUserInObject(user, username) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // checkPullRequestUsers checks PR author, assignees, and reviewers.
 func checkPullRequestUsers(pr map[string]any, username string) bool {
 	// Check PR author
@@ -333,15 +318,23 @@ func checkPullRequestUsers(pr map[string]any, username string) bool {
 
 	// Check assignees
 	if assignees, ok := pr["assignees"].([]any); ok {
-		if matchesUserInList(assignees, username) {
-			return true
+		for _, item := range assignees {
+			if user, ok := item.(map[string]any); ok {
+				if matchesUserInObject(user, username) {
+					return true
+				}
+			}
 		}
 	}
 
 	// Check requested reviewers
 	if reviewers, ok := pr["requested_reviewers"].([]any); ok {
-		if matchesUserInList(reviewers, username) {
-			return true
+		for _, item := range reviewers {
+			if user, ok := item.(map[string]any); ok {
+				if matchesUserInObject(user, username) {
+					return true
+				}
+			}
 		}
 	}
 

@@ -15,7 +15,7 @@ import (
 // Connection management follows a simple pattern:
 //   - ONE goroutine (Run) handles ALL writes to avoid concurrent write issues
 //   - Server sends pings every pingInterval to detect dead connections
-//   - Client responds with pongs; server tracks responses via RecordPong
+//   - Client responds with pongs; read loop resets deadline on any message
 //   - Read loop (in websocket.go) detects disconnects and closes the connection
 type Client struct {
 	conn         *websocket.Conn
@@ -62,7 +62,7 @@ func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, user
 //
 // Connection management:
 //  1. Server sends ping every pingInterval (54s)
-//  2. Client must respond with pong (tracked by RecordPong in read loop)
+//  2. Client must respond with pong (read loop resets deadline on any message)
 //  3. If client doesn't respond, read timeout (90s) will disconnect them
 //  4. Any write error immediately closes the connection
 func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Duration) {
@@ -126,16 +126,6 @@ func (c *Client) write(msg any, timeout time.Duration) error {
 		return fmt.Errorf("send: %w", err)
 	}
 	return nil
-}
-
-// RecordPong records receipt of a pong from the client.
-// This is called by the read loop when a pong message is received.
-// The read loop's timeout (90s) is what actually enforces disconnection.
-func (*Client) RecordPong(_ int64) {
-	// No-op: pong receipt is tracked implicitly by the read loop's timeout.
-	// The read loop resets its deadline on any message (including pong),
-	// so as long as pongs arrive, the connection stays alive.
-	// We keep this method for logging/debugging if needed in the future.
 }
 
 // Close gracefully closes the client.
