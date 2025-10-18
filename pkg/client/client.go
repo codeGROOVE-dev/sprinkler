@@ -76,14 +76,16 @@ type Config struct {
 //   - Server sends pings; client responds with pongs
 //   - Client also sends pings; server responds with pongs
 //   - Both sides use read timeouts to detect dead connections
+//
+//nolint:govet // Field alignment optimization would reduce readability
 type Client struct {
+	mu         sync.RWMutex
+	config     Config
 	logger     *slog.Logger
 	ws         *websocket.Conn
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
-	config     Config
 	writeCh    chan any // Channel for serializing all writes
-	mu         sync.RWMutex
 	eventCount int
 	retries    int
 }
@@ -231,6 +233,8 @@ func (c *Client) Stop() {
 }
 
 // connect establishes a WebSocket connection and handles events.
+//
+//nolint:gocognit,funlen,maintidx // Connection lifecycle orchestration is inherently complex
 func (c *Client) connect(ctx context.Context) error {
 	c.logger.Info("Establishing WebSocket connection")
 
@@ -339,12 +343,21 @@ func (c *Client) connect(ctx context.Context) error {
 	}
 
 	// Check response type
-	responseType, _ := firstResponse[msgTypeField].(string) //nolint:errcheck // type assertion, not error
+	responseType, ok := firstResponse[msgTypeField].(string)
+	if !ok {
+		responseType = ""
+	}
 
 	// Handle error response
 	if responseType == "error" {
-		errorCode, _ := firstResponse["error"].(string) //nolint:errcheck // type assertion, not error
-		message, _ := firstResponse["message"].(string) //nolint:errcheck // type assertion, not error
+		errorCode, ok := firstResponse["error"].(string)
+		if !ok {
+			errorCode = ""
+		}
+		message, ok := firstResponse["message"].(string)
+		if !ok {
+			message = ""
+		}
 		c.logger.Error(separatorLine)
 		c.logger.Error("SUBSCRIPTION REJECTED BY SERVER!", "error_code", errorCode, "message", message)
 		c.logger.Error(separatorLine)
@@ -531,7 +544,10 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		}
 
 		// Check message type
-		responseType, _ := response[msgTypeField].(string) //nolint:errcheck // type assertion, not error
+		responseType, ok := response[msgTypeField].(string)
+		if !ok {
+			responseType = ""
+		}
 
 		// Handle ping messages from server
 		if responseType == "ping" {

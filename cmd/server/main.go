@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	readTimeout    = 10 * time.Second
-	writeTimeout   = 10 * time.Second
-	idleTimeout    = 120 * time.Second
-	maxHeaderBytes = 20  // Max header size multiplier (1 << 20 = 1MB)
-	minTokenLength = 40  // Minimum GitHub token length
-	maxTokenLength = 255 // Maximum GitHub token length
+	readTimeout         = 10 * time.Second
+	writeTimeout        = 10 * time.Second
+	idleTimeout         = 120 * time.Second
+	maxHeaderBytes      = 20  // Max header size multiplier (1 << 20 = 1MB)
+	minTokenLength      = 40  // Minimum GitHub token length
+	maxTokenLength      = 255 // Maximum GitHub token length
+	minMaskHeaderLength = 20  // Minimum header length before we show full "[REDACTED]"
 )
 
 var (
@@ -46,7 +47,7 @@ var (
 	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
 )
 
-//nolint:funlen,lll // Main function orchestrates entire server setup and cannot be split without losing clarity
+//nolint:funlen,gocognit,lll,revive,maintidx // Main function orchestrates entire server setup and cannot be split without losing clarity
 func main() {
 	flag.Parse()
 
@@ -194,6 +195,7 @@ func main() {
 
 		// Pre-validate authentication before WebSocket upgrade
 		authHeader := r.Header.Get("Authorization")
+		//nolint:nestif // Auth validation logic is necessarily complex for detailed error reporting
 		if !wsHandler.PreValidateAuth(r) {
 			// Determine specific failure reason for better debugging
 			reason := "missing"
@@ -210,10 +212,10 @@ func main() {
 				}
 			}
 
-			// Mask token for security (show only length and prefix if present)
+			// Mask token for security (show only length if present)
 			authHeaderLog := "missing"
 			if authHeader != "" {
-				if len(authHeader) > 20 {
+				if len(authHeader) > minMaskHeaderLength {
 					authHeaderLog = fmt.Sprintf("Bearer [REDACTED len=%d]", len(authHeader)-7)
 				} else {
 					authHeaderLog = "[REDACTED]"

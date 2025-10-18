@@ -153,6 +153,89 @@ func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (st
 	return githubToken, true
 }
 
+// tokenDebugInfo extracts token prefix for debug logging.
+func tokenDebugInfo(token string) string {
+	if len(token) >= tokenPrefixLength {
+		return token[:tokenPrefixLength]
+	}
+	return ""
+}
+
+// errorInfo holds error response details.
+type errorInfo struct {
+	code    string
+	message string
+	reason  string
+}
+
+// determineErrorInfo determines error code, message, and reason from error.
+func determineErrorInfo(err error, username string, orgName string, userOrgs []string) errorInfo {
+	errStr := err.Error()
+
+	switch {
+	case strings.Contains(errStr, "invalid GitHub token"):
+		return errorInfo{
+			code:    "authentication_failed",
+			message: "Invalid GitHub token.",
+			reason:  "invalid_token",
+		}
+	case strings.Contains(errStr, "access forbidden"):
+		return errorInfo{
+			code:    "access_denied",
+			message: "Access forbidden. Check token permissions.",
+			reason:  "forbidden",
+		}
+	case strings.Contains(errStr, "rate limit"):
+		return errorInfo{
+			code:    "rate_limit_exceeded",
+			message: "GitHub API rate limit exceeded. Try again later.",
+			reason:  "rate_limit",
+		}
+	case strings.Contains(errStr, "not a member"):
+		msg := fmt.Sprintf("You are not a member of organization '%s'.", orgName)
+		if username != "" {
+			if len(userOrgs) > 0 {
+				msg = fmt.Sprintf("User '%s' is not a member of organization '%s'. Member of: %s",
+					username, orgName, strings.Join(userOrgs, ", "))
+			} else {
+				msg = fmt.Sprintf("User '%s' is not a member of organization '%s'.", username, orgName)
+			}
+		}
+		return errorInfo{
+			code:    "access_denied",
+			message: msg,
+			reason:  "not_org_member",
+		}
+	default:
+		return errorInfo{
+			code:    "access_denied",
+			message: "Access denied.",
+			reason:  errStr,
+		}
+	}
+}
+
+// sendErrorResponse sends an error response to the WebSocket client.
+func sendErrorResponse(ws *websocket.Conn, errInfo errorInfo, ip string) error {
+	errorResp := map[string]string{
+		"type":    "error",
+		"error":   errInfo.code,
+		"message": errInfo.message,
+	}
+
+	if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
+		return err
+	}
+
+	if err := websocket.JSON.Send(ws, errorResp); err != nil {
+		logger.Error("failed to send error response to client", err, logger.Fields{"ip": ip})
+		return err
+	}
+
+	return nil
+}
+
 // readSubscription reads and validates the subscription from the WebSocket.
 func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subscription, error) {
 	var sub Subscription
@@ -188,6 +271,128 @@ func (h *WebSocketHandler) readSubscription(ws *websocket.Conn, ip string) (Subs
 	return sub, nil
 }
 
+// validateWildcardOrg handles wildcard organization subscription.
+func (*WebSocketHandler) validateWildcardOrg(
+	ctx context.Context, ws *websocket.Conn, sub *Subscription,
+	ghClient *github.Client, githubToken, ip string,
+) ([]string, error) {
+	logger.Info("validating GitHub authentication for wildcard org subscription", logger.Fields{"ip": ip})
+
+	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
+	if err != nil {
+		errInfo := determineErrorInfo(err, "", "", nil)
+		tokenPrefix := tokenDebugInfo(githubToken)
+
+		logger.Error("GitHub auth failed for wildcard org subscription", err, logger.Fields{
+			"ip":           ip,
+			"token_prefix": tokenPrefix,
+			"token_length": len(githubToken),
+			"reason":       errInfo.reason,
+		})
+
+		if sendErr := sendErrorResponse(ws, errInfo, ip); sendErr != nil {
+			return nil, sendErr
+		}
+
+		logger.Info("sent authentication error to client", logger.Fields{"ip": ip, "reason": errInfo.reason})
+		return nil, fmt.Errorf("authentication failed: %s: %w", errInfo.reason, err)
+	}
+
+	logger.Info("GitHub authentication successful for wildcard org subscription", logger.Fields{
+		"ip": ip, "username": username, "org_count": len(userOrgs),
+	})
+
+	sub.Username = username
+	return userOrgs, nil
+}
+
+// validateSpecificOrg handles specific organization membership validation.
+func (*WebSocketHandler) validateSpecificOrg(
+	ctx context.Context, ws *websocket.Conn, sub *Subscription,
+	ghClient *github.Client, githubToken, ip string,
+) ([]string, error) {
+	logger.Info("validating GitHub authentication and org membership", logger.Fields{
+		"ip": ip, "org": sub.Organization,
+	})
+
+	username, userOrgs, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
+	if err != nil {
+		errInfo := determineErrorInfo(err, username, sub.Organization, userOrgs)
+		tokenPrefix := tokenDebugInfo(githubToken)
+
+		logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
+			"ip":           ip,
+			"org":          sub.Organization,
+			"username":     username,
+			"token_prefix": tokenPrefix,
+			"token_length": len(githubToken),
+			"reason":       errInfo.reason,
+		})
+
+		if sendErr := sendErrorResponse(ws, errInfo, ip); sendErr != nil {
+			return nil, sendErr
+		}
+
+		logger.Info("sent error to client", logger.Fields{
+			"ip": ip, "org": sub.Organization, "error_code": errInfo.code, "error_reason": errInfo.reason,
+		})
+		return nil, fmt.Errorf("%s: %w", errInfo.reason, err)
+	}
+
+	logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
+		"ip": ip, "org": sub.Organization, "username": username, "org_count": len(userOrgs),
+	})
+
+	sub.Username = username
+	return userOrgs, nil
+}
+
+// validateNoOrg handles authentication when no specific organization is requested.
+func (*WebSocketHandler) validateNoOrg(
+	ctx context.Context, ws *websocket.Conn, sub *Subscription,
+	ghClient *github.Client, githubToken, ip string,
+) ([]string, error) {
+	logger.Info("validating GitHub authentication (no org specified in subscription)", logger.Fields{
+		"ip": ip, "subscription_org": sub.Organization,
+	})
+
+	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
+	if err != nil {
+		errInfo := determineErrorInfo(err, "", "", nil)
+		tokenPrefix := tokenDebugInfo(githubToken)
+
+		logger.Error("GitHub auth failed (no specific org)", err, logger.Fields{
+			"ip":           ip,
+			"token_prefix": tokenPrefix,
+			"token_length": len(githubToken),
+			"reason":       errInfo.reason,
+		})
+
+		if sendErr := sendErrorResponse(ws, errInfo, ip); sendErr != nil {
+			return nil, sendErr
+		}
+
+		logger.Info("sent authentication error to client", logger.Fields{"ip": ip, "reason": errInfo.reason})
+		return nil, fmt.Errorf("authentication failed: %s: %w", errInfo.reason, err)
+	}
+
+	logger.Info("GitHub authentication successful", logger.Fields{
+		"ip": ip, "username": username, "org_count": len(userOrgs),
+	})
+
+	sub.Username = username
+
+	// For GitHub Apps with no org specified, auto-set to their installation org
+	if strings.HasPrefix(username, "app[") && sub.Organization == "" && len(userOrgs) == 1 {
+		sub.Organization = userOrgs[0]
+		logger.Info("auto-setting GitHub App subscription to installation org", logger.Fields{
+			"ip": ip, "org": sub.Organization, "app": username,
+		})
+	}
+
+	return userOrgs, nil
+}
+
 // validateAuth validates the GitHub authentication and organization membership.
 // Returns the list of organizations the user is a member of.
 func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn, sub *Subscription, githubToken, ip string) ([]string, error) {
@@ -202,275 +407,51 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 
 	ghClient := github.NewClient(githubToken)
 
-	// If organization is specified, validate membership
-	//nolint:nestif // Complex org validation logic requires nested checks for different scenarios
 	if sub.Organization != "" {
-		// Handle wildcard organization - user wants to subscribe to all their orgs
 		if sub.Organization == "*" {
-			logger.Info("validating GitHub authentication for wildcard org subscription", logger.Fields{
-				"ip": ip,
-			})
-
-			username, userOrgs, err := ghClient.UserAndOrgs(ctx)
-			if err != nil {
-				// Log token details for debugging
-				tokenPrefix := ""
-				if len(githubToken) >= tokenPrefixLength {
-					tokenPrefix = githubToken[:tokenPrefixLength]
-				}
-
-				// Determine specific error reason for better diagnostics
-				errorMsg := "Authentication failed."
-
-				errStr := err.Error()
-				var errorReason string
-				switch {
-				case strings.Contains(errStr, "invalid GitHub token"):
-					errorMsg = "Invalid GitHub token."
-					errorReason = "invalid_token"
-				case strings.Contains(errStr, "access forbidden"):
-					errorMsg = "Access forbidden. Check token permissions."
-					errorReason = "forbidden"
-				case strings.Contains(errStr, "rate limit"):
-					errorMsg = "GitHub API rate limit exceeded. Try again later."
-					errorReason = "rate_limit"
-				default:
-					errorReason = errStr
-				}
-
-				logger.Error("GitHub auth failed for wildcard org subscription", err, logger.Fields{
-					"ip":           ip,
-					"token_prefix": tokenPrefix,
-					"token_length": len(githubToken),
-					"reason":       errorReason,
-				})
-
-				// Send error response to client
-				errorResp := map[string]string{
-					"type":    "error",
-					"error":   "authentication_failed",
-					"message": errorMsg,
-				}
-
-				// Set a write deadline to ensure we don't hang forever
-				if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
-					logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
-					return nil, err
-				}
-
-				if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-					logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
-					return nil, sendErr
-				}
-
-				logger.Info("sent authentication error to client", logger.Fields{
-					"ip":     ip,
-					"reason": errorReason,
-				})
-				return nil, fmt.Errorf("authentication failed: %s: %w", errorReason, err)
-			}
-
-			logger.Info("GitHub authentication successful for wildcard org subscription", logger.Fields{
-				"ip":        ip,
-				"username":  username,
-				"org_count": len(userOrgs),
-			})
-
-			// Set the authenticated username in subscription
-			sub.Username = username
-			return userOrgs, nil
+			return h.validateWildcardOrg(ctx, ws, sub, ghClient, githubToken, ip)
 		}
-
-		// Regular org subscription - validate specific membership
-		logger.Info("validating GitHub authentication and org membership", logger.Fields{
-			"ip":  ip,
-			"org": sub.Organization,
-		})
-
-		username, userOrgs, err := ghClient.ValidateOrgMembership(ctx, sub.Organization)
-		if err != nil {
-			// Log token details for debugging
-			tokenPrefix := ""
-			if len(githubToken) >= tokenPrefixLength {
-				tokenPrefix = githubToken[:tokenPrefixLength]
-			}
-
-			// Determine specific error reason for better diagnostics
-			errorCode := "access_denied"
-			errorMsg := "Access denied."
-
-			errStr := err.Error()
-			var errorReason string
-			switch {
-			case strings.Contains(errStr, "invalid GitHub token"):
-				errorCode = "authentication_failed"
-				errorMsg = "Invalid GitHub token."
-				errorReason = "invalid_token"
-			case strings.Contains(errStr, "access forbidden"):
-				errorCode = "access_denied"
-				errorMsg = "Access forbidden. Check token permissions."
-				errorReason = "forbidden"
-			case strings.Contains(errStr, "not a member"):
-				errorCode = "access_denied"
-				// Include username/app identifier in error message
-				if username != "" {
-					if len(userOrgs) > 0 {
-						errorMsg = fmt.Sprintf("User '%s' is not a member of organization '%s'. Member of: %s",
-							username, sub.Organization, strings.Join(userOrgs, ", "))
-					} else {
-						errorMsg = fmt.Sprintf("User '%s' is not a member of organization '%s'.", username, sub.Organization)
-					}
-				} else {
-					errorMsg = fmt.Sprintf("You are not a member of organization '%s'.", sub.Organization)
-				}
-				errorReason = "not_org_member"
-			case strings.Contains(errStr, "rate limit"):
-				errorCode = "rate_limit_exceeded"
-				errorMsg = "GitHub API rate limit exceeded. Try again later."
-				errorReason = "rate_limit"
-			default:
-				errorReason = errStr
-			}
-
-			logger.Error("GitHub auth/org membership validation failed", err, logger.Fields{
-				"ip":           ip,
-				"org":          sub.Organization,
-				"username":     username,
-				"token_prefix": tokenPrefix,
-				"token_length": len(githubToken),
-				"reason":       errorReason,
-			})
-
-			// Send error response to client
-			errorResp := map[string]string{
-				"type":    "error",
-				"error":   errorCode,
-				"message": errorMsg,
-			}
-
-			// Set a write deadline to ensure we don't hang forever
-			if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
-				return nil, err
-			}
-
-			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-				logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
-				return nil, sendErr
-			}
-
-			logger.Info("sent error to client", logger.Fields{
-				"ip":           ip,
-				"org":          sub.Organization,
-				"error_code":   errorCode,
-				"error_reason": errorReason,
-			})
-			return nil, fmt.Errorf("%s: %w", errorReason, err)
-		}
-
-		logger.Info("GitHub authentication and org membership validated successfully", logger.Fields{
-			"ip":        ip,
-			"org":       sub.Organization,
-			"username":  username,
-			"org_count": len(userOrgs),
-		})
-
-		// Set the authenticated username in subscription
-		sub.Username = username
-		return userOrgs, nil
+		return h.validateSpecificOrg(ctx, ws, sub, ghClient, githubToken, ip)
 	}
 
-	// No organization specified - just get user info and all their orgs
-	// For GitHub Apps, this will auto-detect the installation org
-	logger.Info("validating GitHub authentication (no org specified in subscription)", logger.Fields{
-		"ip":               ip,
-		"subscription_org": sub.Organization,
-	})
+	return h.validateNoOrg(ctx, ws, sub, ghClient, githubToken, ip)
+}
 
-	username, userOrgs, err := ghClient.UserAndOrgs(ctx)
-	if err != nil {
-		// Log token details for debugging
-		tokenPrefix := ""
-		if len(githubToken) >= tokenPrefixLength {
-			tokenPrefix = githubToken[:tokenPrefixLength]
+// closeWebSocket gracefully closes a WebSocket connection with cleanup.
+func closeWebSocket(ws *websocket.Conn) {
+	clientIP := security.ClientIP(ws.Request())
+	log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
+
+	// Send a final shutdown message to allow graceful client disconnect
+	shutdownMsg := map[string]string{"type": "server_closing", "code": "1001"}
+	if err := ws.SetWriteDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		log.Printf("failed to set write deadline for shutdown message: %v", err)
+	}
+	if err := websocket.JSON.Send(ws, shutdownMsg); err != nil {
+		// Expected during abrupt disconnection - don't log common cases
+		if !strings.Contains(err.Error(), "use of closed network connection") &&
+			!strings.Contains(err.Error(), "broken pipe") {
+			log.Printf("failed to send shutdown message: %v", err)
 		}
+	}
 
-		// Determine specific error reason for better diagnostics
-		errorMsg := "Authentication failed. Please check your GitHub token."
-
-		errStr := err.Error()
-		var errorReason string
+	// Close the connection
+	if err := ws.Close(); err != nil {
+		// Check if it's already closed - not an error
 		switch {
-		case strings.Contains(errStr, "invalid GitHub token"):
-			errorMsg = "Invalid GitHub token."
-			errorReason = "invalid_token"
-		case strings.Contains(errStr, "access forbidden"):
-			errorMsg = "Access forbidden. Check token permissions."
-			errorReason = "forbidden"
-		case strings.Contains(errStr, "rate limit"):
-			errorMsg = "GitHub API rate limit exceeded. Try again later."
-			errorReason = "rate_limit"
+		case strings.Contains(err.Error(), "use of closed network connection"):
+			log.Printf("WebSocket already closed for IP %s (expected during normal shutdown)", clientIP)
+		case strings.Contains(err.Error(), "broken pipe"):
+			log.Printf("WebSocket broken pipe for IP %s (client already disconnected)", clientIP)
 		default:
-			errorReason = errStr
+			log.Printf("ERROR: failed to close websocket for IP %s: %v", clientIP, err)
 		}
-
-		logger.Error("GitHub auth failed (no specific org)", err, logger.Fields{
-			"ip":           ip,
-			"token_prefix": tokenPrefix,
-			"token_length": len(githubToken),
-			"reason":       errorReason,
-		})
-
-		// Send error response to client
-		errorResp := map[string]string{
-			"type":    "error",
-			"error":   "authentication_failed",
-			"message": errorMsg,
-		}
-
-		// Set a write deadline to ensure we don't hang forever
-		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
-			logger.Error("failed to set write deadline", err, logger.Fields{"ip": ip})
-			return nil, err
-		}
-
-		if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-			logger.Error("failed to send error response to client", sendErr, logger.Fields{"ip": ip})
-			return nil, sendErr
-		}
-
-		logger.Info("sent authentication error to client", logger.Fields{
-			"ip":     ip,
-			"reason": errorReason,
-		})
-		return nil, fmt.Errorf("authentication failed: %s: %w", errorReason, err)
 	}
-
-	logger.Info("GitHub authentication successful", logger.Fields{
-		"ip":        ip,
-		"username":  username,
-		"org_count": len(userOrgs),
-	})
-
-	// Set the authenticated username in subscription
-	sub.Username = username
-
-	// For GitHub Apps with no org specified, auto-set to their installation org
-	if strings.HasPrefix(username, "app[") && sub.Organization == "" && len(userOrgs) == 1 {
-		sub.Organization = userOrgs[0]
-		logger.Info("auto-setting GitHub App subscription to installation org", logger.Fields{
-			"ip":  ip,
-			"org": sub.Organization,
-			"app": username,
-		})
-	}
-
-	return userOrgs, nil
 }
 
 // Handle handles a WebSocket connection.
 //
-//nolint:funlen,gocyclo // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
+//nolint:funlen,gocyclo,gocognit,revive,maintidx // This function orchestrates the complete WebSocket lifecycle and cannot be split without losing clarity
 func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	// Log that we entered the handler
 	log.Print("WebSocket Handle() started")
@@ -480,36 +461,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	defer cancel()
 
 	// Ensure WebSocket is properly closed
-	defer func() {
-		clientIP := security.ClientIP(ws.Request())
-		log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
-
-		// Send a final shutdown message to allow graceful client disconnect
-		shutdownMsg := map[string]string{"type": "server_closing", "code": "1001"}
-		if err := ws.SetWriteDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
-			log.Printf("failed to set write deadline for shutdown message: %v", err)
-		}
-		if err := websocket.JSON.Send(ws, shutdownMsg); err != nil {
-			// Expected during abrupt disconnection - don't log common cases
-			if !strings.Contains(err.Error(), "use of closed network connection") &&
-				!strings.Contains(err.Error(), "broken pipe") {
-				log.Printf("failed to send shutdown message: %v", err)
-			}
-		}
-
-		// Close the connection
-		if err := ws.Close(); err != nil {
-			// Check if it's already closed - not an error
-			switch {
-			case strings.Contains(err.Error(), "use of closed network connection"):
-				log.Printf("WebSocket already closed for IP %s (expected during normal shutdown)", clientIP)
-			case strings.Contains(err.Error(), "broken pipe"):
-				log.Printf("WebSocket broken pipe for IP %s (client already disconnected)", clientIP)
-			default:
-				log.Printf("ERROR: failed to close websocket for IP %s: %v", clientIP, err)
-			}
-		}
-	}()
+	defer closeWebSocket(ws)
 
 	// Get client IP
 	ip := security.ClientIP(ws.Request())
