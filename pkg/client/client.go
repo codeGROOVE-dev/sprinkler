@@ -1,5 +1,3 @@
-// Package client provides a robust WebSocket client for connecting to webhook sprinkler servers.
-// It handles automatic reconnection, ping/pong keep-alive, and comprehensive logging.
 package client
 
 import (

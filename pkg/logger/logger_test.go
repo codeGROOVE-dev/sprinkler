@@ -126,7 +126,7 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 
 	fields := Fields{
 		"path":  "/etc/passwd",
-		"query": "SELECT * FROM users",
+		"query": "SELECT id, name FROM users",
 		"url":   "https://example.com?foo=bar&baz=qux",
 	}
 
@@ -136,7 +136,7 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 	if !strings.Contains(output, "path=/etc/passwd") {
 		t.Error("path field not preserved correctly")
 	}
-	if !strings.Contains(output, "query=SELECT * FROM users") {
+	if !strings.Contains(output, "query=SELECT id, name FROM users") {
 		t.Error("query field not preserved correctly")
 	}
 	if !strings.Contains(output, "url=https://example.com?foo=bar&baz=qux") {
@@ -166,14 +166,14 @@ func TestFieldsWithNilValues(t *testing.T) {
 	}
 }
 
-// TestWithFieldsFormatting tests the WithFields function with format strings
+// TestWithFieldsFormatting tests the WithFieldsf function with format strings
 func TestWithFieldsFormatting(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(nil)
 
 	fields := Fields{"user": "alice"}
-	WithFields(fields, "User %s logged in at %d", "bob", 12345)
+	WithFieldsf(fields, "User %s logged in at %d", "bob", 12345)
 
 	output := buf.String()
 	if !strings.Contains(output, "User bob logged in at 12345") {

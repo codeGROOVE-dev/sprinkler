@@ -12,8 +12,8 @@ import (
 // Fields represents structured log fields.
 type Fields map[string]any
 
-// WithFields adds structured context to log messages.
-func WithFields(fields Fields, format string, args ...any) {
+// WithFieldsf adds structured context to log messages with printf-style formatting.
+func WithFieldsf(fields Fields, format string, args ...any) {
 	// Sort keys for consistent output
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
@@ -36,7 +36,7 @@ func WithFields(fields Fields, format string, args ...any) {
 
 // Info logs an info message with optional fields.
 func Info(msg string, fields Fields) {
-	WithFields(fields, "%s", msg)
+	WithFieldsf(fields, "%s", msg)
 }
 
 // Error logs an error message with optional fields.
@@ -45,10 +45,10 @@ func Error(msg string, err error, fields Fields) {
 		fields = Fields{}
 	}
 	fields["error"] = err.Error()
-	WithFields(fields, "ERROR: %s", msg)
+	WithFieldsf(fields, "ERROR: %s", msg)
 }
 
 // Warn logs a warning message with optional fields.
 func Warn(msg string, fields Fields) {
-	WithFields(fields, "WARNING: %s", msg)
+	WithFieldsf(fields, "WARNING: %s", msg)
 }

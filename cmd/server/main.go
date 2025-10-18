@@ -87,8 +87,8 @@ func main() {
 
 	// CORS support removed - WebSocket clients should handle auth via Authorization header
 
-	h := srv.NewHub()
-	go h.Run(ctx)
+	hub := srv.NewHub()
+	go hub.Run(ctx)
 
 	// Create security components
 	rateLimiter := security.NewRateLimiter(*rateLimit, time.Minute)
@@ -117,7 +117,7 @@ func main() {
 	log.Println("Registered health check handler at /")
 
 	// Webhook handler - exact match
-	webhookHandler := webhook.NewHandler(h, webhookSecretValue, allowedEventTypes)
+	webhookHandler := webhook.NewHandler(hub, webhookSecretValue, allowedEventTypes)
 	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
 		ip := security.ClientIP(r)
 		startTime := time.Now()
@@ -147,7 +147,7 @@ func main() {
 	log.Println("Registered webhook handler at /webhook")
 
 	// WebSocket handler - exact match
-	wsHandler := srv.NewWebSocketHandler(h, connLimiter, allowedEventTypes)
+	wsHandler := srv.NewWebSocketHandler(hub, connLimiter, allowedEventTypes)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
 		ip := security.ClientIP(r)
@@ -195,7 +195,6 @@ func main() {
 
 		// Pre-validate authentication before WebSocket upgrade
 		authHeader := r.Header.Get("Authorization")
-		//nolint:nestif // Auth validation logic is necessarily complex for detailed error reporting
 		if !wsHandler.PreValidateAuth(r) {
 			// Determine specific failure reason for better debugging
 			reason := "missing"
@@ -280,7 +279,7 @@ func main() {
 		cancel()
 
 		// Stop accepting new connections
-		h.Stop()
+		hub.Stop()
 
 		// Stop the rate limiter cleanup routine
 		rateLimiter.Stop()
@@ -298,7 +297,7 @@ func main() {
 		}
 
 		// Wait for hub to finish
-		h.Wait()
+		hub.Wait()
 
 		close(done)
 	}()

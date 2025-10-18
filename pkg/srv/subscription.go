@@ -89,7 +89,7 @@ func (s *Subscription) Validate() error {
 
 			// Basic validation - should be a GitHub PR URL
 			// Format: https://github.com/owner/repo/pull/number
-			if !strings.HasPrefix(prURL, "https://github.com/") && !strings.HasPrefix(prURL, "http://github.com/") {
+			if !strings.HasPrefix(prURL, "https://github.com/") {
 				return errors.New("invalid PR URL format")
 			}
 
