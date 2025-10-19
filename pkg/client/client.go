@@ -42,10 +42,11 @@ const (
 
 // Event represents a webhook event received from the server.
 type Event struct {
-	Timestamp time.Time `json:"timestamp"`
-	Raw       map[string]any
-	Type      string `json:"type"`
-	URL       string `json:"url"`
+	Timestamp  time.Time `json:"timestamp"`
+	Raw        map[string]any
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	DeliveryID string `json:"delivery_id,omitempty"`
 }
 
 // Config holds the configuration for the client.
@@ -592,6 +593,10 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 			}
 		}
 
+		if deliveryID, ok := response["delivery_id"].(string); ok {
+			event.DeliveryID = deliveryID
+		}
+
 		c.mu.Lock()
 		c.eventCount++
 		eventNum := c.eventCount
@@ -604,6 +609,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 				"timestamp", event.Timestamp.Format("15:04:05"),
 				"type", event.Type,
 				"url", event.URL,
+				"delivery_id", event.DeliveryID,
 				"raw", event.Raw)
 		} else {
 			if event.Type != "" && event.URL != "" {
@@ -611,11 +617,13 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 					"timestamp", event.Timestamp.Format("15:04:05"),
 					"event_number", eventNum,
 					"type", event.Type,
-					"url", event.URL)
+					"url", event.URL,
+					"delivery_id", event.DeliveryID)
 			} else {
 				c.logger.Info("Event received",
 					"timestamp", event.Timestamp.Format("15:04:05"),
 					"event_number", eventNum,
+					"delivery_id", event.DeliveryID,
 					"response", response)
 			}
 		}

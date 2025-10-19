@@ -10,11 +10,12 @@ import (
 )
 
 // Event represents a GitHub webhook event that will be broadcast to clients.
-// It contains the PR URL, timestamp, and event type from GitHub.
+// It contains the PR URL, timestamp, event type, and delivery ID from GitHub.
 type Event struct {
-	URL       string    `json:"url"`       // Pull request URL
-	Timestamp time.Time `json:"timestamp"` // When the event occurred
-	Type      string    `json:"type"`      // GitHub event type (e.g., "pull_request")
+	URL        string    `json:"url"`                   // Pull request URL
+	Timestamp  time.Time `json:"timestamp"`             // When the event occurred
+	Type       string    `json:"type"`                  // GitHub event type (e.g., "pull_request")
+	DeliveryID string    `json:"delivery_id,omitempty"` // GitHub webhook delivery ID (unique per webhook)
 }
 
 // Hub manages WebSocket clients and event broadcasting.
@@ -106,17 +107,17 @@ func (h *Hub) Run(ctx context.Context) {
 					select {
 					case client.send <- msg.event:
 						matched++
-						log.Printf("delivered event to client: id=%s user=%s org=%s event_type=%s pr_url=%s",
+						log.Printf("delivered event to client: id=%s user=%s org=%s event_type=%s pr_url=%s delivery_id=%s",
 							client.ID, client.subscription.Username, client.subscription.Organization,
-							msg.event.Type, msg.event.URL)
+							msg.event.Type, msg.event.URL, msg.event.DeliveryID)
 					default:
 						dropped++
 						log.Printf("dropped event for client %s: buffer full", client.ID)
 					}
 				}
 			}
-			log.Printf("broadcast event: type=%s matched=%d/%d clients, dropped=%d",
-				msg.event.Type, matched, totalClients, dropped)
+			log.Printf("broadcast event: type=%s delivery_id=%s matched=%d/%d clients, dropped=%d",
+				msg.event.Type, msg.event.DeliveryID, matched, totalClients, dropped)
 		}
 	}
 }
