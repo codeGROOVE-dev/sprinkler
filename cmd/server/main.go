@@ -32,7 +32,7 @@ const (
 	minMaskHeaderLength = 20  // Minimum header length before we show full "[REDACTED]"
 )
 
-// getEnvOrDefault returns the value of the environment variable or the default if not set
+// getEnvOrDefault returns the value of the environment variable or the default if not set.
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -232,8 +232,9 @@ func main() {
 			return
 		}
 
-		// Check connection limit before upgrade
-		if !connLimiter.CanAdd(ip) {
+		// Reserve a connection slot before upgrade (prevents TOCTOU race condition)
+		reservationToken := connLimiter.Reserve(ip)
+		if reservationToken == "" {
 			log.Printf("WebSocket 429: connection limit ip=%s", ip)
 			w.WriteHeader(http.StatusTooManyRequests)
 			if _, err := w.Write([]byte("429 Too Many Requests: Connection limit exceeded\n")); err != nil {
@@ -241,6 +242,9 @@ func main() {
 			}
 			return
 		}
+
+		// Set reservation token in request context so websocket handler can commit it
+		r = r.WithContext(context.WithValue(r.Context(), "reservation_token", reservationToken))
 
 		// Log successful auth and proceed to upgrade
 		log.Printf("WebSocket UPGRADE: ip=%s duration=%v", ip, time.Since(startTime))

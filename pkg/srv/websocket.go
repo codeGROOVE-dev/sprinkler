@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -402,34 +403,74 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	return h.validateNoOrg(ctx, ws, sub, ghClient, githubToken, ip)
 }
 
+// wsCloser wraps a WebSocket connection with sync.Once to prevent double-close.
+type wsCloser struct {
+	ws        *websocket.Conn
+	closeOnce sync.Once
+	closed    bool
+	mu        sync.Mutex
+}
+
+// newWSCloser creates a new WebSocket closer wrapper.
+func newWSCloser(ws *websocket.Conn) *wsCloser {
+	return &wsCloser{ws: ws}
+}
+
+// Close closes the WebSocket connection exactly once.
+func (wc *wsCloser) Close() error {
+	var err error
+	wc.closeOnce.Do(func() {
+		err = wc.ws.Close()
+		wc.mu.Lock()
+		wc.closed = true
+		wc.mu.Unlock()
+	})
+	return err
+}
+
+// IsClosed returns whether the connection has been closed.
+func (wc *wsCloser) IsClosed() bool {
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	return wc.closed
+}
+
 // closeWebSocket gracefully closes a WebSocket connection with cleanup.
 // If client is provided, shutdown message is sent via control channel to avoid race.
-func closeWebSocket(ws *websocket.Conn, client *Client) {
-	clientIP := security.ClientIP(ws.Request())
-	log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
+// Uses sync.Once to ensure the connection is only closed once, preventing double-close panics.
+func closeWebSocket(wc *wsCloser, client *Client, ip string) {
+	log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", ip)
 
-	// Send shutdown message via control channel if client exists
+	// Send shutdown message via control channel if client exists and is not already shutting down
 	if client != nil {
-		shutdownMsg := map[string]any{"type": "server_closing", "code": "1001"}
+		// Check if client is already shutting down to avoid panic from sending to closed channel
 		select {
-		case client.control <- shutdownMsg:
-			// Give brief time for shutdown message to be sent
-			time.Sleep(100 * time.Millisecond)
-		case <-time.After(200 * time.Millisecond):
-			log.Printf("Timeout sending shutdown message to client %s", client.ID)
+		case <-client.done:
+			// Client already shutting down, skip shutdown message
+			log.Printf("Client %s already shutting down, skipping shutdown message", client.ID)
+		default:
+			// Client still active, attempt to send shutdown message
+			shutdownMsg := map[string]any{"type": "server_closing", "code": "1001"}
+			select {
+			case client.control <- shutdownMsg:
+				// Give brief time for shutdown message to be sent
+				time.Sleep(100 * time.Millisecond)
+			case <-time.After(200 * time.Millisecond):
+				log.Printf("Timeout sending shutdown message to client %s", client.ID)
+			}
 		}
 	}
 
-	// Close the connection
-	if err := ws.Close(); err != nil {
+	// Close the connection (sync.Once ensures this only happens once)
+	if err := wc.Close(); err != nil {
 		// Check if it's already closed - not an error
 		switch {
 		case strings.Contains(err.Error(), "use of closed network connection"):
-			log.Printf("WebSocket already closed for IP %s (expected during normal shutdown)", clientIP)
+			log.Printf("WebSocket already closed for IP %s (expected during normal shutdown)", ip)
 		case strings.Contains(err.Error(), "broken pipe"):
-			log.Printf("WebSocket broken pipe for IP %s (client already disconnected)", clientIP)
+			log.Printf("WebSocket broken pipe for IP %s (client already disconnected)", ip)
 		default:
-			log.Printf("ERROR: failed to close websocket for IP %s: %v", clientIP, err)
+			log.Printf("ERROR: failed to close websocket for IP %s: %v", ip, err)
 		}
 	}
 }
@@ -445,15 +486,18 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ws.Request().Context())
 	defer cancel()
 
+	// Get client IP early for logging
+	ip := security.ClientIP(ws.Request())
+	log.Printf("WebSocket Handle() got IP: %s", ip)
+
+	// Wrap WebSocket with sync.Once closer to prevent double-close
+	wc := newWSCloser(ws)
+
 	// Ensure WebSocket is properly closed (client will be set later if connection succeeds)
 	var client *Client
 	defer func() {
-		closeWebSocket(ws, client)
+		closeWebSocket(wc, client, ip)
 	}()
-
-	// Get client IP
-	ip := security.ClientIP(ws.Request())
-	log.Printf("WebSocket Handle() got IP: %s", ip)
 
 	// Log incoming WebSocket request
 	logger.Info("WebSocket connection attempt", logger.Fields{
@@ -462,6 +506,21 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		"path":       ws.Request().URL.Path,
 		"origin":     ws.Request().Header.Get("Origin"),
 	})
+
+	// Get reservation token from context (set by main.go before upgrade)
+	reservationToken, _ := ws.Request().Context().Value("reservation_token").(string)
+	if reservationToken == "" {
+		// No reservation token - this should not happen in production
+		// (main.go always sets it), but handle gracefully for tests
+		log.Printf("WARNING: No reservation token in context for IP %s", ip)
+	}
+
+	// Cancel reservation on early return
+	defer func() {
+		if reservationToken != "" {
+			h.connLimiter.CancelReservation(reservationToken)
+		}
+	}()
 
 	githubToken, ok := h.extractGitHubToken(ws, ip)
 	if !ok {
@@ -487,27 +546,31 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
-	// Check connection limit
-	if !h.connLimiter.Add(ip) {
-		// Send 429 error response to client
-		errorResp := map[string]string{
-			"type":    "error",
-			"error":   "connection_limit_exceeded",
-			"message": "Too many connections from this IP address. Please try again later.",
-		}
-
-		// Try to send error response
-		if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
-			if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
-				logger.Error("failed to send 429 error response", sendErr, logger.Fields{"ip": ip})
+	// Commit the reservation to convert it to an active connection
+	if reservationToken != "" {
+		if !h.connLimiter.CommitReservation(reservationToken) {
+			// Reservation expired or invalid - this shouldn't happen normally
+			// Send 429 error response to client
+			errorResp := map[string]string{
+				"type":    "error",
+				"error":   "connection_limit_exceeded",
+				"message": "Connection reservation expired. Please try again.",
 			}
-		}
 
-		logger.Warn("WebSocket connection rejected: 429 Too Many Requests - connection limit exceeded", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-		})
-		return
+			if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err == nil {
+				if sendErr := websocket.JSON.Send(ws, errorResp); sendErr != nil {
+					logger.Error("failed to send reservation expired error", sendErr, logger.Fields{"ip": ip})
+				}
+			}
+
+			logger.Warn("WebSocket connection rejected: reservation expired", logger.Fields{
+				"ip":         ip,
+				"user_agent": ws.Request().UserAgent(),
+			})
+			return
+		}
+		// Reservation committed - now set to empty so defer won't cancel it
+		reservationToken = ""
 	}
 	defer h.connLimiter.Remove(ip)
 
@@ -641,12 +704,21 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		userOrgs,
 	)
 
+	// Will be incremented when registered, but show current count
+	currentClients := h.hub.ClientCount()
+
+	log.Println("========================================")
+	log.Printf("✅ NEW CLIENT CONNECTING: user=%s org=%s ip=%s client_id=%s (will be client #%d)",
+		sub.Username, sub.Organization, ip, client.ID, currentClients+1)
+	log.Println("========================================")
 	logger.Info("WebSocket connection established", logger.Fields{
-		"ip":               ip,
-		"org":              sub.Organization,
-		"user":             sub.Username,
-		"event_types":      sub.EventTypes,
-		"user_events_only": sub.UserEventsOnly,
+		"ip":                 ip,
+		"org":                sub.Organization,
+		"user":               sub.Username,
+		"client_id":          client.ID,
+		"event_types":        sub.EventTypes,
+		"user_events_only":   sub.UserEventsOnly,
+		"will_be_client_num": currentClients + 1,
 	})
 
 	// Send success response to client immediately after successful subscription
@@ -685,7 +757,16 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	h.hub.Register(client)
 	defer func() {
 		h.hub.Unregister(client.ID)
-		logger.Info("WebSocket disconnected", logger.Fields{"ip": ip, "client_id": client.ID})
+		log.Println("========================================")
+		log.Printf("❌ CLIENT DISCONNECTING: user=%s org=%s ip=%s client_id=%s",
+			sub.Username, sub.Organization, ip, client.ID)
+		log.Println("========================================")
+		logger.Info("WebSocket disconnected", logger.Fields{
+			"ip":        ip,
+			"client_id": client.ID,
+			"user":      sub.Username,
+			"org":       sub.Organization,
+		})
 	}()
 
 	// Start event sender in goroutine
