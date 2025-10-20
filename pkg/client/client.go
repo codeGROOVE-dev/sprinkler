@@ -57,6 +57,7 @@ type Config struct {
 	OnConnect      func()
 	ServerURL      string
 	Token          string
+	TokenProvider  func() (string, error) // Optional: dynamically provide fresh tokens for reconnection
 	Organization   string
 	EventTypes     []string
 	PullRequests   []string
@@ -98,8 +99,8 @@ func New(config Config) (*Client, error) {
 	if config.Organization == "" && len(config.PullRequests) == 0 {
 		return nil, errors.New("organization or pull requests required")
 	}
-	if config.Token == "" {
-		return nil, errors.New("token is required")
+	if config.Token == "" && config.TokenProvider == nil {
+		return nil, errors.New("token or tokenProvider is required")
 	}
 
 	// Set defaults
@@ -237,6 +238,17 @@ func (c *Client) Stop() {
 func (c *Client) connect(ctx context.Context) error {
 	c.logger.Info("Establishing WebSocket connection")
 
+	// Get fresh token if TokenProvider is configured
+	token := c.config.Token
+	if c.config.TokenProvider != nil {
+		t, err := c.config.TokenProvider()
+		if err != nil {
+			return fmt.Errorf("token provider: %w", err)
+		}
+		token = t
+		c.logger.Debug("Using fresh token from TokenProvider")
+	}
+
 	// Create WebSocket config with appropriate origin
 	origin := "http://localhost/"
 	if strings.HasPrefix(c.config.ServerURL, "wss://") {
@@ -249,7 +261,7 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Add Authorization header
 	wsConfig.Header = make(map[string][]string)
-	wsConfig.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", c.config.Token)}
+	wsConfig.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", token)}
 
 	// Dial the server
 	ws, err := websocket.DialConfig(wsConfig)
@@ -361,10 +373,10 @@ func (c *Client) connect(ctx context.Context) error {
 		c.logger.Error("SUBSCRIPTION REJECTED BY SERVER!", "error_code", errorCode, "message", message)
 		c.logger.Error(separatorLine)
 
-		// Return AuthenticationError for access denied errors to prevent retries
-		if errorCode == "access_denied" {
+		// Return AuthenticationError for authentication/authorization errors to prevent retries
+		if errorCode == "access_denied" || errorCode == "authentication_failed" {
 			return &AuthenticationError{
-				message: fmt.Sprintf("Access denied: %s", message),
+				message: fmt.Sprintf("Authentication/authorization failed: %s", message),
 			}
 		}
 
@@ -535,11 +547,6 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 			c.logger.Error("Lost connection while reading!", "error", err, "events_received", c.eventCount)
 			c.logger.Error(separatorLine)
 			return fmt.Errorf("read: %w", err)
-		}
-
-		// Clear read timeout after successful read
-		if err := ws.SetReadDeadline(time.Time{}); err != nil {
-			c.logger.Warn("Failed to clear read timeout", "error", err)
 		}
 
 		// Check message type

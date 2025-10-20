@@ -233,6 +233,10 @@ func sendErrorResponse(ws *websocket.Conn, errInfo errorInfo, ip string) error {
 		return err
 	}
 
+	// Allow time for client to receive error before connection closes.
+	// Without this delay, TCP close can race with message delivery, causing clients to see EOF.
+	time.Sleep(100 * time.Millisecond)
+
 	return nil
 }
 
@@ -418,20 +422,20 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 }
 
 // closeWebSocket gracefully closes a WebSocket connection with cleanup.
-func closeWebSocket(ws *websocket.Conn) {
+// If client is provided, shutdown message is sent via control channel to avoid race.
+func closeWebSocket(ws *websocket.Conn, client *Client) {
 	clientIP := security.ClientIP(ws.Request())
 	log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", clientIP)
 
-	// Send a final shutdown message to allow graceful client disconnect
-	shutdownMsg := map[string]string{"type": "server_closing", "code": "1001"}
-	if err := ws.SetWriteDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
-		log.Printf("failed to set write deadline for shutdown message: %v", err)
-	}
-	if err := websocket.JSON.Send(ws, shutdownMsg); err != nil {
-		// Expected during abrupt disconnection - don't log common cases
-		if !strings.Contains(err.Error(), "use of closed network connection") &&
-			!strings.Contains(err.Error(), "broken pipe") {
-			log.Printf("failed to send shutdown message: %v", err)
+	// Send shutdown message via control channel if client exists
+	if client != nil {
+		shutdownMsg := map[string]any{"type": "server_closing", "code": "1001"}
+		select {
+		case client.control <- shutdownMsg:
+			// Give brief time for shutdown message to be sent
+			time.Sleep(100 * time.Millisecond)
+		case <-time.After(200 * time.Millisecond):
+			log.Printf("Timeout sending shutdown message to client %s", client.ID)
 		}
 	}
 
@@ -460,8 +464,11 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ws.Request().Context())
 	defer cancel()
 
-	// Ensure WebSocket is properly closed
-	defer closeWebSocket(ws)
+	// Ensure WebSocket is properly closed (client will be set later if connection succeeds)
+	var client *Client
+	defer func() {
+		closeWebSocket(ws, client)
+	}()
 
 	// Get client IP
 	ip := security.ClientIP(ws.Request())
@@ -645,7 +652,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		}
 		id[i] = charset[n.Int64()]
 	}
-	client := NewClient(
+	client = NewClient(
 		string(id),
 		sub,
 		ws,
@@ -765,17 +772,17 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 					// (which happens for ANY message including pong) keeps the connection alive
 					continue
 				case "ping":
-					// Client sent us a ping, send pong back
+					// Client sent us a ping, send pong back via control channel to avoid race
 					pong := map[string]any{"type": "pong"}
 					if seq, ok := msgMap["seq"]; ok {
 						pong["seq"] = seq
 					}
-					if err := ws.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
-						log.Printf("failed to set write deadline for pong to client %s: %v", client.ID, err)
-						continue
-					}
-					if err := websocket.JSON.Send(ws, pong); err != nil {
-						log.Printf("failed to send pong to client %s: %v", client.ID, err)
+					// Non-blocking send to avoid deadlock if control channel is full
+					select {
+					case client.control <- pong:
+						// Pong queued successfully
+					default:
+						log.Printf("WARNING: client %s control channel full, dropping pong", client.ID)
 					}
 					continue
 				case "keepalive", "heartbeat":

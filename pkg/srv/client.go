@@ -20,6 +20,7 @@ import (
 type Client struct {
 	conn         *websocket.Conn
 	send         chan Event
+	control      chan map[string]any // Control messages (pongs, shutdown notices)
 	hub          *Hub
 	done         chan struct{}
 	userOrgs     map[string]bool
@@ -49,7 +50,8 @@ func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, user
 		ID:           id,
 		subscription: sub,
 		conn:         conn,
-		send:         make(chan Event, 100), // Increased buffer to reduce dropped messages
+		send:         make(chan Event, 100),        // Increased buffer to reduce dropped messages
+		control:      make(chan map[string]any, 5), // Buffer for control messages (pongs, shutdown)
 		hub:          hub,
 		done:         make(chan struct{}),
 		userOrgs:     orgsMap,
@@ -98,6 +100,18 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 				return
 			}
 
+		case ctrl, ok := <-c.control:
+			if !ok {
+				log.Printf("client %s: control channel closed", c.ID)
+				return
+			}
+
+			// Send control message (pong, shutdown notice, etc.)
+			if err := c.write(ctrl, writeTimeout); err != nil {
+				log.Printf("client %s: control message send failed: %v", c.ID, err)
+				return
+			}
+
 		case event, ok := <-c.send:
 			if !ok {
 				log.Printf("client %s: send channel closed", c.ID)
@@ -133,5 +147,6 @@ func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		close(c.send)
+		close(c.control)
 	})
 }
