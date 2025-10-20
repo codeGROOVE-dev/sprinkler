@@ -32,6 +32,14 @@ const (
 	minMaskHeaderLength = 20  // Minimum header length before we show full "[REDACTED]"
 )
 
+// getEnvOrDefault returns the value of the environment variable or the default if not set
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 var (
 	webhookSecret = flag.String("webhook-secret", os.Getenv("GITHUB_WEBHOOK_SECRET"), "GitHub webhook secret for signature verification")
 	addr          = flag.String("addr", ":8080", "HTTP service address")
@@ -42,8 +50,8 @@ var (
 	maxConnsPerIP = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
 	maxConnsTotal = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
 	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
-	allowedEvents = flag.String("allowed-events", os.Getenv("ALLOWED_WEBHOOK_EVENTS"),
-		"Comma-separated list of allowed webhook event types (use '*' for all)")
+	allowedEvents = flag.String("allowed-events", getEnvOrDefault("ALLOWED_WEBHOOK_EVENTS", "*"),
+		"Comma-separated list of allowed webhook event types (use '*' for all, default: '*')")
 	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
 )
 
@@ -60,13 +68,6 @@ func main() {
 	if webhookSecretValue == "" {
 		cancel()
 		log.Fatal("ERROR: Webhook secret is required for security. Set -webhook-secret or GITHUB_WEBHOOK_SECRET environment variable.")
-	}
-
-	// Validate allowed events is configured (REQUIRED)
-	if *allowedEvents == "" {
-		cancel()
-		log.Fatal("ERROR: Allowed events must be specified. Set -allowed-events or " +
-			"ALLOWED_WEBHOOK_EVENTS environment variable. Use '*' to allow all events.")
 	}
 
 	// Parse allowed events
