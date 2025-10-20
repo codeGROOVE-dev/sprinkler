@@ -4,9 +4,11 @@ package srv
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
 )
 
 // Event represents a GitHub webhook event that will be broadcast to clients.
@@ -62,30 +64,66 @@ func (h *Hub) Run(ctx context.Context) {
 	defer close(h.stopped)
 	defer h.cleanup()
 
+	logger.Info("========================================", nil)
+	logger.Info("HUB STARTED - Fresh hub with 0 clients", nil)
+	logger.Info("========================================", nil)
+
+	// Periodic client count logging (every minute)
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("hub shutting down")
+			logger.Info("hub shutting down", nil)
 			return
 		case <-h.stop:
-			log.Println("hub stop requested")
+			logger.Info("hub stop requested", nil)
 			return
+
+		case <-ticker.C:
+			h.mu.RLock()
+			count := len(h.clients)
+			clientDetails := make([]string, 0, count)
+			for _, client := range h.clients {
+				clientDetails = append(clientDetails, fmt.Sprintf("%s@%s", client.subscription.Username, client.subscription.Organization))
+			}
+			h.mu.RUnlock()
+			logger.Info("⏱️  PERIODIC CHECK", logger.Fields{
+				"total_clients": count,
+				"clients":       clientDetails,
+			})
 
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client.ID] = client
+			totalClients := len(h.clients)
 			h.mu.Unlock()
-			log.Printf("client registered: id=%s", client.ID)
+			logger.Info("CLIENT REGISTERED", logger.Fields{
+				"client_id":     client.ID,
+				"org":           client.subscription.Organization,
+				"user":          client.subscription.Username,
+				"total_clients": totalClients,
+			})
 
 		case clientID := <-h.unregister:
 			h.mu.Lock()
 			if client, ok := h.clients[clientID]; ok {
 				delete(h.clients, clientID)
+				totalClients := len(h.clients)
 				client.Close()
 				h.mu.Unlock()
-				log.Printf("client unregistered: id=%s", clientID)
+				logger.Info("CLIENT UNREGISTERED", logger.Fields{
+					"client_id":     clientID,
+					"org":           client.subscription.Organization,
+					"user":          client.subscription.Username,
+					"total_clients": totalClients,
+				})
 			} else {
 				h.mu.Unlock()
+				logger.Warn("attempted to unregister unknown client", logger.Fields{
+					"client_id": clientID,
+				})
 			}
 
 		case msg := <-h.broadcast:
@@ -107,17 +145,38 @@ func (h *Hub) Run(ctx context.Context) {
 					select {
 					case client.send <- msg.event:
 						matched++
-						log.Printf("delivered event to client: id=%s user=%s org=%s event_type=%s pr_url=%s delivery_id=%s",
-							client.ID, client.subscription.Username, client.subscription.Organization,
-							msg.event.Type, msg.event.URL, msg.event.DeliveryID)
+						logger.Info("delivered event to client", logger.Fields{
+							"client_id":   client.ID,
+							"user":        client.subscription.Username,
+							"org":         client.subscription.Organization,
+							"event_type":  msg.event.Type,
+							"pr_url":      msg.event.URL,
+							"delivery_id": msg.event.DeliveryID,
+						})
 					default:
 						dropped++
-						log.Printf("dropped event for client %s: buffer full", client.ID)
+						logger.Warn("dropped event for client: buffer full", logger.Fields{
+							"client_id": client.ID,
+						})
 					}
 				}
 			}
-			log.Printf("broadcast event: type=%s delivery_id=%s matched=%d/%d clients, dropped=%d",
-				msg.event.Type, msg.event.DeliveryID, matched, totalClients, dropped)
+			if totalClients == 0 {
+				logger.Warn("⚠️⚠️⚠️  broadcast with ZERO clients connected ⚠️⚠️⚠️", nil)
+				logger.Warn("⚠️  Event will be LOST", logger.Fields{
+					"event_type":  msg.event.Type,
+					"delivery_id": msg.event.DeliveryID,
+					"pr_url":      msg.event.URL,
+				})
+				logger.Warn("⚠️  Possible reasons: fresh deployment, all clients disconnected, or network issue", nil)
+			}
+			logger.Info("broadcast event", logger.Fields{
+				"event_type":    msg.event.Type,
+				"delivery_id":   msg.event.DeliveryID,
+				"matched":       matched,
+				"total_clients": totalClients,
+				"dropped":       dropped,
+			})
 		}
 	}
 }
@@ -128,7 +187,7 @@ func (h *Hub) Broadcast(event Event, payload map[string]any) {
 	case h.broadcast <- broadcastMsg{event: event, payload: payload}:
 	default:
 		// Hub is at capacity or shutting down, drop the message
-		log.Print("dropping broadcast: hub at capacity or shutting down")
+		logger.Warn("dropping broadcast: hub at capacity or shutting down", nil)
 	}
 }
 
@@ -157,27 +216,39 @@ func (h *Hub) Unregister(clientID string) {
 	h.unregister <- clientID
 }
 
+// ClientCount returns the current number of connected clients.
+// Safe to call from any goroutine.
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
 // cleanup closes all client connections during shutdown.
 func (h *Hub) cleanup() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	log.Printf("Hub cleanup: closing %d client connections gracefully", len(h.clients))
+	logger.Info("Hub cleanup: closing client connections gracefully", logger.Fields{
+		"client_count": len(h.clients),
+	})
 
 	for id, client := range h.clients {
 		// Try to send shutdown message (non-blocking)
 		select {
 		case client.send <- Event{Type: "shutdown"}:
-			log.Printf("Sent shutdown notice to client %s", id)
+			logger.Info("sent shutdown notice to client", logger.Fields{"client_id": id})
 		default:
-			log.Printf("Could not send shutdown notice to client %s (channel full)", id)
+			logger.Warn("could not send shutdown notice to client: channel full", logger.Fields{"client_id": id})
 		}
 	}
 
 	// Give clients a moment to process shutdown messages and close gracefully
 	// This allows time for proper WebSocket close frames to be sent
 	if len(h.clients) > 0 {
-		log.Printf("Waiting for %d clients to receive shutdown messages...", len(h.clients))
+		logger.Info("waiting for clients to receive shutdown messages", logger.Fields{
+			"client_count": len(h.clients),
+		})
 		time.Sleep(200 * time.Millisecond)
 	}
 
@@ -186,5 +257,5 @@ func (h *Hub) cleanup() {
 		client.Close()
 	}
 	h.clients = nil
-	log.Print("Hub cleanup complete")
+	logger.Info("Hub cleanup complete", nil)
 }

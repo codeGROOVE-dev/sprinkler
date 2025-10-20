@@ -291,6 +291,8 @@ func matches(sub Subscription, event Event, payload map[string]any, userOrgs map
 		// Handle wildcard organization - matches any org the user is a member of
 		if sub.Organization == "*" {
 			// Check if the event org is one the user is a member of
+			// If event has no org info (eventOrg == ""), don't match for security
+			// (we can't verify user has permission to see events without org context)
 			return eventOrg != "" && userOrgs[strings.ToLower(eventOrg)]
 		}
 		// Case-insensitive org name comparison

@@ -287,7 +287,9 @@ func (c *Client) connect(ctx context.Context) error {
 		}
 		return fmt.Errorf("dial: %w", err)
 	}
-	c.logger.Info("✓ WebSocket connection ESTABLISHED successfully!")
+	c.logger.Info("========================================")
+	c.logger.Info(fmt.Sprintf("✅ WebSocket ESTABLISHED: %s (org: %s)", c.config.ServerURL, c.config.Organization))
+	c.logger.Info("========================================")
 
 	// Store connection
 	c.mu.Lock()
@@ -295,7 +297,8 @@ func (c *Client) connect(ctx context.Context) error {
 	c.mu.Unlock()
 
 	defer func() {
-		c.logger.Debug("Closing WebSocket connection")
+		c.logger.Info("========================================")
+		c.logger.Info(fmt.Sprintf("❌ WebSocket CLOSING: %s (org: %s)", c.config.ServerURL, c.config.Organization))
 		c.mu.Lock()
 		c.ws = nil
 		c.mu.Unlock()
@@ -304,6 +307,7 @@ func (c *Client) connect(ctx context.Context) error {
 		} else {
 			c.logger.Info("✓ WebSocket connection closed cleanly")
 		}
+		c.logger.Info("========================================")
 	}()
 
 	// Build subscription

@@ -3,12 +3,13 @@ package srv
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
+
+	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
 )
 
 // Client represents a connected WebSocket client with their subscription preferences.
@@ -36,7 +37,10 @@ func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, user
 	orgsToProcess := userOrgs
 	if len(userOrgs) > maxOrgs {
 		orgsToProcess = userOrgs[:maxOrgs]
-		log.Printf("WARNING: User has %d organizations, limiting to %d", len(userOrgs), maxOrgs)
+		logger.Warn("user has too many organizations, limiting", logger.Fields{
+			"user_org_count": len(userOrgs),
+			"max_orgs":       maxOrgs,
+		})
 	}
 
 	// Build a map for O(1) org membership lookups
@@ -80,11 +84,11 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("client %s: context cancelled, shutting down", c.ID)
+			logger.Debug("client context cancelled, shutting down", logger.Fields{"client_id": c.ID})
 			return
 
 		case <-c.done:
-			log.Printf("client %s: done signal received", c.ID)
+			logger.Debug("client done signal received", logger.Fields{"client_id": c.ID})
 			return
 
 		case <-pingTicker.C:
@@ -96,36 +100,43 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			}
 
 			if err := c.write(ping, writeTimeout); err != nil {
-				log.Printf("client %s: ping failed: %v", c.ID, err)
+				logger.Warn("client ping failed", logger.Fields{
+					"client_id": c.ID,
+					"error":     err.Error(),
+				})
 				return
 			}
 
 		case ctrl, ok := <-c.control:
 			if !ok {
-				log.Printf("client %s: control channel closed", c.ID)
+				logger.Debug("client control channel closed", logger.Fields{"client_id": c.ID})
 				return
 			}
 
 			// Send control message (pong, shutdown notice, etc.)
 			if err := c.write(ctrl, writeTimeout); err != nil {
-				log.Printf("client %s: control message send failed: %v", c.ID, err)
+				logger.Warn("client control message send failed", logger.Fields{
+					"client_id": c.ID,
+					"error":     err.Error(),
+				})
 				return
 			}
 
 		case event, ok := <-c.send:
 			if !ok {
-				log.Printf("client %s: send channel closed", c.ID)
+				logger.Debug("client send channel closed", logger.Fields{"client_id": c.ID})
 				return
 			}
 
-			log.Printf("Sending event to client %s: type=%s", c.ID, event.Type)
-
+			// Write event (hub already logged delivery, so we only log failures here)
 			if err := c.write(event, writeTimeout); err != nil {
-				log.Printf("client %s: event send failed: %v", c.ID, err)
+				logger.Warn("client event send failed", logger.Fields{
+					"client_id":  c.ID,
+					"event_type": event.Type,
+					"error":      err.Error(),
+				})
 				return
 			}
-
-			log.Printf("✓ Event sent to client %s", c.ID)
 		}
 	}
 }

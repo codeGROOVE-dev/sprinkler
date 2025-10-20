@@ -157,23 +157,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract PR URL
 	prURL := ExtractPRURL(eventType, payload)
 	if prURL == "" {
-		// For check events, try to extract commit SHA and look up associated PRs via API
-		if eventType == "check_run" || eventType == "check_suite" {
-			commitSHA := extractCommitSHA(eventType, payload)
-			if commitSHA != "" {
-				logger.Info("no PR URL in check event payload, will need API lookup", logger.Fields{
-					"event_type":  eventType,
-					"delivery_id": deliveryID,
-					"commit_sha":  commitSHA,
-					"note":        "commit SHA can be used to query GitHub API: GET /repos/OWNER/REPO/commits/SHA/pulls",
-				})
-			} else {
-				logger.Warn("check event has no PR URL and no commit SHA", logger.Fields{
-					"event_type":  eventType,
-					"delivery_id": deliveryID,
-				})
-			}
-		} else {
+		// For non-check events, log payload and return early
+		if eventType != "check_run" && eventType != "check_suite" {
 			// Log full payload to understand the structure (for non-check events)
 			payloadJSON, err := json.Marshal(payload)
 			if err != nil {
@@ -189,9 +174,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"payload":     string(payloadJSON),
 				})
 			}
+			w.WriteHeader(http.StatusOK)
+			return
 		}
-		w.WriteHeader(http.StatusOK)
-		return
+
+		// For check events without PR URL, this is a known race condition
+		// GitHub webhooks can fire before the pull_requests array is populated
+		commitSHA := extractCommitSHA(eventType, payload)
+		// Extract repo URL as fallback for org-based matching
+		repoURL := extractRepoURL(payload)
+
+		// If we can't extract repo URL, drop the event
+		if repoURL == "" {
+			// Can't extract even repo URL - must drop the event
+			logger.Warn("⛔ DROPPING CHECK EVENT - no PR URL or repo URL", logger.Fields{
+				"event_type":  eventType,
+				"delivery_id": deliveryID,
+				"commit_sha":  commitSHA,
+				"issue":       "cannot extract repository information from payload",
+			})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// We can still broadcast using repo URL - org-based subscriptions will work
+		logger.Warn("⚠️  CHECK EVENT RACE CONDITION DETECTED", logger.Fields{
+			"event_type":  eventType,
+			"delivery_id": deliveryID,
+			"commit_sha":  commitSHA,
+			"repo_url":    repoURL,
+			"issue":       "pull_requests array not yet populated by GitHub",
+			"workaround":  "broadcasting with repo URL for org-based subscriptions",
+		})
+
+		// Use repo URL as fallback - org subscriptions will still work
+		prURL = repoURL
 	}
 
 	// Create and broadcast event
@@ -202,6 +219,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DeliveryID: deliveryID,
 	}
 
+	// Get client count before broadcasting (for debugging delivery issues)
+	clientCount := h.hub.ClientCount()
+
 	h.hub.Broadcast(event, payload)
 
 	w.WriteHeader(http.StatusOK)
@@ -209,14 +229,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to write response", err, logger.Fields{"delivery_id": deliveryID})
 	}
 
-	// Log successful webhook processing
-	logger.Info("webhook processed successfully", logger.Fields{
-		"event_type":   eventType,
-		"delivery_id":  deliveryID,
-		"pr_url":       prURL,
-		"remote_addr":  r.RemoteAddr,
-		"payload_size": len(body),
-	})
+	// Log successful webhook processing with client count for debugging
+	logFields := logger.Fields{
+		"event_type":        eventType,
+		"delivery_id":       deliveryID,
+		"url":               prURL,
+		"remote_addr":       r.RemoteAddr,
+		"payload_size":      len(body),
+		"connected_clients": clientCount,
+	}
+
+	// Indicate if this is a repo URL fallback (check event race condition)
+	if (eventType == "check_run" || eventType == "check_suite") && !strings.Contains(prURL, "/pull/") {
+		logFields["url_type"] = "repository_fallback"
+		logFields["note"] = "using repo URL due to missing pull_requests array (GitHub timing issue)"
+	} else {
+		logFields["url_type"] = "pull_request"
+	}
+
+	logger.Info("webhook processed successfully", logFields)
 }
 
 // VerifySignature validates the GitHub webhook signature.
@@ -382,6 +413,17 @@ func extractCommitSHA(eventType string, payload map[string]any) string {
 		}
 	default:
 		// Not a check event, no SHA to extract
+	}
+	return ""
+}
+
+// extractRepoURL extracts the repository HTML URL from the payload.
+// This is used as a fallback when PR URL cannot be extracted (e.g., check event race condition).
+func extractRepoURL(payload map[string]any) string {
+	if repo, ok := payload["repository"].(map[string]any); ok {
+		if htmlURL, ok := repo["html_url"].(string); ok {
+			return htmlURL
+		}
 	}
 	return ""
 }

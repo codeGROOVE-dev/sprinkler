@@ -3,39 +3,52 @@
 package security
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"sync"
 	"time"
 )
 
 const (
-	staleTimeout = 10 * time.Minute // Time after which inactive entries are considered stale
-	maxIPEntries = 10000            // Maximum number of IP entries to prevent memory exhaustion
+	staleTimeout       = 10 * time.Minute // Time after which inactive entries are considered stale
+	maxIPEntries       = 10000            // Maximum number of IP entries to prevent memory exhaustion
+	reservationTimeout = 10 * time.Second // Time before unused reservations expire
 )
 
 // connectionInfo tracks connection count and last activity time.
 type connectionInfo struct {
-	lastActive time.Time
-	count      int
+	lastActive   time.Time
+	count        int
+	reservations int // Pending reservations (not yet committed)
+}
+
+// reservation represents a reserved connection slot.
+type reservation struct {
+	ip        string
+	createdAt time.Time
 }
 
 // ConnectionLimiter tracks connections per IP and total.
 type ConnectionLimiter struct {
-	perIP       map[string]*connectionInfo
-	stopCleanup chan struct{}
-	total       int
-	maxPerIP    int
-	maxTotal    int
-	mu          sync.Mutex
+	perIP        map[string]*connectionInfo
+	reservations map[string]*reservation // token -> reservation
+	stopCleanup  chan struct{}
+	total        int
+	totalReserve int // Total reserved (pending) connections
+	maxPerIP     int
+	maxTotal     int
+	mu           sync.Mutex
 }
 
 // NewConnectionLimiter creates a new connection limiter with periodic cleanup.
 func NewConnectionLimiter(maxPerIP, maxTotal int) *ConnectionLimiter {
 	cl := &ConnectionLimiter{
-		perIP:       make(map[string]*connectionInfo),
-		maxPerIP:    maxPerIP,
-		maxTotal:    maxTotal,
-		stopCleanup: make(chan struct{}),
+		perIP:        make(map[string]*connectionInfo),
+		reservations: make(map[string]*reservation),
+		maxPerIP:     maxPerIP,
+		maxTotal:     maxTotal,
+		stopCleanup:  make(chan struct{}),
 	}
 
 	// Start cleanup goroutine to remove stale entries
@@ -44,7 +57,138 @@ func NewConnectionLimiter(maxPerIP, maxTotal int) *ConnectionLimiter {
 	return cl
 }
 
+// Reserve reserves a connection slot for the given IP, returning a token.
+// Returns empty string if the limit would be exceeded.
+// The reservation must be committed with CommitReservation() or it will expire.
+func (cl *ConnectionLimiter) Reserve(ip string) string {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+
+	// Check if we would exceed limits (including reservations)
+	info := cl.perIP[ip]
+	perIPTotal := 0
+	if info != nil {
+		perIPTotal = info.count + info.reservations
+	}
+
+	if cl.total+cl.totalReserve >= cl.maxTotal || perIPTotal >= cl.maxPerIP {
+		return ""
+	}
+
+	// Generate secure random token
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		log.Printf("ERROR: failed to generate reservation token: %v", err)
+		return ""
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	// Create or update connection info
+	if info == nil {
+		// Check memory limit before creating new entry
+		if len(cl.perIP) >= maxIPEntries {
+			cl.evictOldestInactive()
+			if len(cl.perIP) >= maxIPEntries {
+				return ""
+			}
+		}
+		info = &connectionInfo{}
+		cl.perIP[ip] = info
+	}
+
+	// Record reservation
+	cl.reservations[token] = &reservation{
+		ip:        ip,
+		createdAt: time.Now(),
+	}
+	info.reservations++
+	info.lastActive = time.Now()
+	cl.totalReserve++
+
+	return token
+}
+
+// CommitReservation converts a reservation into an active connection.
+// Returns false if the token is invalid or expired.
+func (cl *ConnectionLimiter) CommitReservation(token string) bool {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+
+	res := cl.reservations[token]
+	if res == nil {
+		return false
+	}
+
+	// Check if reservation expired
+	if time.Since(res.createdAt) > reservationTimeout {
+		// Clean up expired reservation
+		delete(cl.reservations, token)
+		if info := cl.perIP[res.ip]; info != nil {
+			info.reservations--
+			if info.reservations < 0 {
+				info.reservations = 0
+			}
+		}
+		cl.totalReserve--
+		if cl.totalReserve < 0 {
+			cl.totalReserve = 0
+		}
+		return false
+	}
+
+	info := cl.perIP[res.ip]
+	if info == nil {
+		// This shouldn't happen, but handle gracefully
+		delete(cl.reservations, token)
+		cl.totalReserve--
+		return false
+	}
+
+	// Convert reservation to active connection
+	info.count++
+	info.reservations--
+	info.lastActive = time.Now()
+	cl.total++
+	cl.totalReserve--
+	delete(cl.reservations, token)
+
+	return true
+}
+
+// CancelReservation cancels a reservation without converting it to a connection.
+func (cl *ConnectionLimiter) CancelReservation(token string) {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+
+	res := cl.reservations[token]
+	if res == nil {
+		return
+	}
+
+	// Remove reservation
+	delete(cl.reservations, token)
+	if info := cl.perIP[res.ip]; info != nil {
+		info.reservations--
+		info.lastActive = time.Now()
+		if info.reservations < 0 {
+			info.reservations = 0
+		}
+		// Clean up if no connections and no reservations
+		if info.count == 0 && info.reservations == 0 {
+			delete(cl.perIP, res.ip)
+		}
+	}
+	cl.totalReserve--
+	if cl.totalReserve < 0 {
+		cl.totalReserve = 0
+	}
+}
+
 // CanAdd checks if a connection can be added for the given IP without actually adding it.
+// DEPRECATED: This method has a TOCTOU race condition. Use Reserve() instead, which
+// atomically checks and reserves a slot, preventing the race.
+//
+// This method is kept for backward compatibility and testing only.
 func (cl *ConnectionLimiter) CanAdd(ip string) bool {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -137,24 +281,46 @@ func (cl *ConnectionLimiter) cleanupLoop() {
 	}
 }
 
-// cleanup removes entries that haven't been active for over 10 minutes.
+// cleanup removes entries that haven't been active and expired reservations.
 func (cl *ConnectionLimiter) cleanup() {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
 	now := time.Now()
-	// Use the constant defined at package level
 	cleaned := 0
+	expiredReservations := 0
 
+	// Clean up stale IP entries
 	for ip, info := range cl.perIP {
-		if info.count == 0 && now.Sub(info.lastActive) > staleTimeout {
+		if info.count == 0 && info.reservations == 0 && now.Sub(info.lastActive) > staleTimeout {
 			delete(cl.perIP, ip)
 			cleaned++
 		}
 	}
 
-	if cleaned > 0 {
-		log.Printf("ConnectionLimiter: cleaned up %d stale IP entries", cleaned)
+	// Clean up expired reservations
+	for token, res := range cl.reservations {
+		if now.Sub(res.createdAt) > reservationTimeout {
+			delete(cl.reservations, token)
+			if info := cl.perIP[res.ip]; info != nil {
+				info.reservations--
+				if info.reservations < 0 {
+					info.reservations = 0
+				}
+			}
+			cl.totalReserve--
+			expiredReservations++
+		}
+	}
+
+	if cleaned > 0 || expiredReservations > 0 {
+		log.Printf("ConnectionLimiter: cleaned up %d stale IPs, %d expired reservations", cleaned, expiredReservations)
+	}
+
+	// Sanity check on totalReserve
+	if cl.totalReserve < 0 {
+		log.Printf("ConnectionLimiter: WARN: totalReserve was negative (%d), resetting to 0", cl.totalReserve)
+		cl.totalReserve = 0
 	}
 }
 
