@@ -4,11 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestRateLimiter(t *testing.T) {
-	rl := NewRateLimiter(5, time.Second)
+	rl := NewRateLimiter(5)
 
 	ip := "192.168.1.1"
 

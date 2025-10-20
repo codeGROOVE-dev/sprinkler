@@ -91,7 +91,7 @@ func main() {
 	go hub.Run(ctx)
 
 	// Create security components
-	rateLimiter := security.NewRateLimiter(*rateLimit, time.Minute)
+	rateLimiter := security.NewRateLimiter(*rateLimit)
 	connLimiter := security.NewConnectionLimiter(*maxConnsPerIP, *maxConnsTotal)
 
 	mux := http.NewServeMux()

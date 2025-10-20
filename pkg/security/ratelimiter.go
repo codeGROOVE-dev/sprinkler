@@ -25,7 +25,7 @@ type bucket struct {
 }
 
 // NewRateLimiter creates a new rate limiter.
-func NewRateLimiter(maxTokens int, _ time.Duration) *RateLimiter {
+func NewRateLimiter(maxTokens int) *RateLimiter {
 	rl := &RateLimiter{
 		buckets:    make(map[string]*bucket),
 		maxTokens:  maxTokens,
