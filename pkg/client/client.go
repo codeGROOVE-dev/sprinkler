@@ -85,7 +85,8 @@ type Client struct {
 	ws         *websocket.Conn
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
-	writeCh    chan any // Channel for serializing all writes
+	stopOnce   sync.Once // Ensures Stop() is only executed once
+	writeCh    chan any  // Channel for serializing all writes
 	eventCount int
 	retries    int
 }
@@ -220,16 +221,27 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the client.
+// Safe to call multiple times - only the first call will take effect.
+// Also safe to call before Start() or if Start() was never called.
 func (c *Client) Stop() {
-	close(c.stopCh)
-	c.mu.Lock()
-	if c.ws != nil {
-		if closeErr := c.ws.Close(); closeErr != nil {
-			c.logger.Error("Error closing websocket on shutdown", "error", closeErr)
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+		c.mu.Lock()
+		if c.ws != nil {
+			if closeErr := c.ws.Close(); closeErr != nil {
+				c.logger.Error("Error closing websocket on shutdown", "error", closeErr)
+			}
 		}
-	}
-	c.mu.Unlock()
-	<-c.stoppedCh
+		c.mu.Unlock()
+
+		// Wait for Start() to finish, but with timeout in case Start() was never called
+		select {
+		case <-c.stoppedCh:
+			// Start() completed normally
+		case <-time.After(100 * time.Millisecond):
+			// Start() was never called or hasn't started yet - that's ok
+		}
+	})
 }
 
 // connect establishes a WebSocket connection and handles events.

@@ -25,8 +25,8 @@ type connectionInfo struct {
 
 // reservation represents a reserved connection slot.
 type reservation struct {
-	ip        string
 	createdAt time.Time
+	ip        string
 }
 
 // ConnectionLimiter tracks connections per IP and total.
@@ -185,7 +185,7 @@ func (cl *ConnectionLimiter) CancelReservation(token string) {
 }
 
 // CanAdd checks if a connection can be added for the given IP without actually adding it.
-// DEPRECATED: This method has a TOCTOU race condition. Use Reserve() instead, which
+// Deprecated: This method has a TOCTOU race condition. Use Reserve() instead, which
 // atomically checks and reserves a slot, preventing the race.
 //
 // This method is kept for backward compatibility and testing only.

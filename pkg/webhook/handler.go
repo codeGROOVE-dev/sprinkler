@@ -182,7 +182,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// GitHub webhooks can fire before the pull_requests array is populated
 		commitSHA := extractCommitSHA(eventType, payload)
 		// Extract repo URL as fallback for org-based matching
-		repoURL := extractRepoURL(payload)
+		repoURL := ""
+		if repo, ok := payload["repository"].(map[string]any); ok {
+			if htmlURL, ok := repo["html_url"].(string); ok {
+				repoURL = htmlURL
+			}
+		}
 
 		// If we can't extract repo URL, drop the event
 		if repoURL == "" {
@@ -299,11 +304,15 @@ func ExtractPRURL(eventType string, payload map[string]any) string {
 			}
 		}
 		// Log when we can't extract PR URL from check event
+		payloadKeys := make([]string, 0, len(payload))
+		for k := range payload {
+			payloadKeys = append(payloadKeys, k)
+		}
 		logger.Warn("no PR URL found in check event", logger.Fields{
 			"event_type":      eventType,
 			"has_check_run":   payload["check_run"] != nil,
 			"has_check_suite": payload["check_suite"] != nil,
-			"payload_keys":    getPayloadKeys(payload),
+			"payload_keys":    payloadKeys,
 		})
 	default:
 		// For other event types, no PR URL can be extracted
@@ -378,15 +387,6 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 	return constructedURL
 }
 
-// getPayloadKeys returns the keys from a payload map for logging.
-func getPayloadKeys(payload map[string]any) []string {
-	keys := make([]string, 0, len(payload))
-	for k := range payload {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // getMapKeys returns the keys from a map for logging.
 func getMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
@@ -417,13 +417,3 @@ func extractCommitSHA(eventType string, payload map[string]any) string {
 	return ""
 }
 
-// extractRepoURL extracts the repository HTML URL from the payload.
-// This is used as a fallback when PR URL cannot be extracted (e.g., check event race condition).
-func extractRepoURL(payload map[string]any) string {
-	if repo, ok := payload["repository"].(map[string]any); ok {
-		if htmlURL, ok := repo["html_url"].(string); ok {
-			return htmlURL
-		}
-	}
-	return ""
-}
