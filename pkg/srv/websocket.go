@@ -426,29 +426,30 @@ func (wc *wsCloser) IsClosed() bool {
 }
 
 // closeWebSocket gracefully closes a WebSocket connection with cleanup.
-// If client is provided, shutdown message is sent via control channel to avoid race.
 // Uses sync.Once to ensure the connection is only closed once, preventing double-close panics.
+//
+// CRITICAL THREADING NOTE:
+// This function MUST NOT send to client channels (send/control) because of a TOCTOU race:
+//  1. Multiple cleanup paths can run concurrently:
+//     - Handle() defer calls closeWebSocket()
+//     - Handle() defer calls Hub.Unregister() which eventually calls client.Close()
+//     - Client.Run() defer calls client.Close() on context cancellation
+//     - Hub.cleanup() calls client.Close() during shutdown
+//  2. client.Close() uses sync.Once to close all channels atomically (done, send, control)
+//  3. Checking if client.done is closed doesn't guarantee client.control is still open
+//  4. Race: check done (open) → another goroutine closes all channels → send to control → PANIC
+//
+// Instead, we rely on:
+//  - WebSocket connection close will be detected by the client
+//  - Context cancellation signals Client.Run() to exit gracefully
+//  - Hub.Unregister() handles client cleanup asynchronously
 func closeWebSocket(wc *wsCloser, client *Client, ip string) {
 	log.Printf("WebSocket Handle() cleanup - closing connection for IP %s", ip)
 
-	// Send shutdown message via control channel if client exists and is not already shutting down
+	// DO NOT send shutdown message - creates race condition with client.Close()
+	// The client will detect the WebSocket connection close, which is sufficient.
 	if client != nil {
-		// Check if client is already shutting down to avoid panic from sending to closed channel
-		select {
-		case <-client.done:
-			// Client already shutting down, skip shutdown message
-			log.Printf("Client %s already shutting down, skipping shutdown message", client.ID)
-		default:
-			// Client still active, attempt to send shutdown message
-			shutdownMsg := map[string]any{"type": "server_closing", "code": "1001"}
-			select {
-			case client.control <- shutdownMsg:
-				// Give brief time for shutdown message to be sent
-				time.Sleep(100 * time.Millisecond)
-			case <-time.After(200 * time.Millisecond):
-				log.Printf("Timeout sending shutdown message to client %s", client.ID)
-			}
-		}
+		log.Printf("Client %s cleanup - WebSocket close will signal disconnect", client.ID)
 	}
 
 	// Close the connection (sync.Once ensures this only happens once)
