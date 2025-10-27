@@ -3,6 +3,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -49,9 +50,13 @@ func NewHandler(h *srv.Hub, secret string, allowedEvents []string) *Handler {
 }
 
 // ServeHTTP processes GitHub webhook events.
+//
+//nolint:maintidx // Webhook processing requires comprehensive validation and error handling
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	// Log incoming webhook request details
-	logger.Info("webhook request received", logger.Fields{
+	logger.Info(ctx, "webhook request received", logger.Fields{
 		"method":       r.Method,
 		"url":          r.URL.String(),
 		"remote_addr":  r.RemoteAddr,
@@ -62,7 +67,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if r.Method != http.MethodPost {
-		logger.Warn("webhook rejected: invalid method", logger.Fields{
+		logger.Warn(ctx, "webhook rejected: invalid method", logger.Fields{
 			"method":      r.Method,
 			"remote_addr": r.RemoteAddr,
 			"path":        r.URL.Path,
@@ -77,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check if event type is allowed
 	if h.allowedEventsMap != nil && !h.allowedEventsMap[eventType] {
-		logger.Warn("webhook event type not allowed", logger.Fields{
+		logger.Warn(ctx, "webhook event type not allowed", logger.Fields{
 			"event_type":  eventType,
 			"delivery_id": deliveryID,
 		})
@@ -87,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check content length before reading
 	if r.ContentLength > maxPayloadSize {
-		logger.Warn("webhook rejected: payload too large", logger.Fields{
+		logger.Warn(ctx, "webhook rejected: payload too large", logger.Fields{
 			"content_length": r.ContentLength,
 			"max_size":       maxPayloadSize,
 			"delivery_id":    deliveryID,
@@ -100,7 +105,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Read body
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
 	if err != nil {
-		logger.Error("error reading webhook body", err, logger.Fields{"delivery_id": deliveryID})
+		logger.Error(ctx, "error reading webhook body", err, logger.Fields{"delivery_id": deliveryID})
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -112,7 +117,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Verify signature
 	if !VerifySignature(body, signature, h.secret) {
-		logger.Warn("webhook rejected: 401 Unauthorized - signature verification failed", logger.Fields{
+		logger.Warn(ctx, "webhook rejected: 401 Unauthorized - signature verification failed", logger.Fields{
 			"delivery_id":      deliveryID,
 			"event_type":       eventType,
 			"remote_addr":      r.RemoteAddr,
@@ -126,7 +131,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse payload
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		logger.Error("webhook rejected: 400 Bad Request - error parsing payload", err, logger.Fields{
+		logger.Error(ctx, "webhook rejected: 400 Bad Request - error parsing payload", err, logger.Fields{
 			"delivery_id":  deliveryID,
 			"event_type":   eventType,
 			"remote_addr":  r.RemoteAddr,
@@ -140,13 +145,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if eventType == "check_run" || eventType == "check_suite" {
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
-			logger.Warn("failed to marshal check event payload", logger.Fields{
+			logger.Warn(ctx, "failed to marshal check event payload", logger.Fields{
 				"event_type":  eventType,
 				"delivery_id": deliveryID,
 				"error":       err.Error(),
 			})
 		} else {
-			logger.Info("received check event - full payload for debugging", logger.Fields{
+			logger.Info(ctx, "received check event - full payload for debugging", logger.Fields{
 				"event_type":  eventType,
 				"delivery_id": deliveryID,
 				"payload":     string(payloadJSON),
@@ -155,20 +160,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract PR URL
-	prURL := ExtractPRURL(eventType, payload)
+	prURL := ExtractPRURL(ctx, eventType, payload)
 	if prURL == "" {
 		// For non-check events, log payload and return early
 		if eventType != "check_run" && eventType != "check_suite" {
 			// Log full payload to understand the structure (for non-check events)
 			payloadJSON, err := json.Marshal(payload)
 			if err != nil {
-				logger.Warn("failed to marshal payload for logging", logger.Fields{
+				logger.Warn(ctx, "failed to marshal payload for logging", logger.Fields{
 					"event_type":  eventType,
 					"delivery_id": deliveryID,
 					"error":       err.Error(),
 				})
 			} else {
-				logger.Info("no PR URL found in event - full payload", logger.Fields{
+				logger.Info(ctx, "no PR URL found in event - full payload", logger.Fields{
 					"event_type":  eventType,
 					"delivery_id": deliveryID,
 					"payload":     string(payloadJSON),
@@ -192,7 +197,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// If we can't extract repo URL, drop the event
 		if repoURL == "" {
 			// Can't extract even repo URL - must drop the event
-			logger.Warn("⛔ DROPPING CHECK EVENT - no PR URL or repo URL", logger.Fields{
+			logger.Warn(ctx, "⛔ DROPPING CHECK EVENT - no PR URL or repo URL", logger.Fields{
 				"event_type":  eventType,
 				"delivery_id": deliveryID,
 				"commit_sha":  commitSHA,
@@ -203,7 +208,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// We can still broadcast using repo URL - org-based subscriptions will work
-		logger.Warn("⚠️  CHECK EVENT RACE CONDITION DETECTED", logger.Fields{
+		logger.Warn(ctx, "⚠️  CHECK EVENT RACE CONDITION DETECTED", logger.Fields{
 			"event_type":  eventType,
 			"delivery_id": deliveryID,
 			"commit_sha":  commitSHA,
@@ -232,11 +237,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Get client count before broadcasting (for debugging delivery issues)
 	clientCount := h.hub.ClientCount()
 
-	h.hub.Broadcast(event, payload)
+	h.hub.Broadcast(ctx, event, payload)
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("OK")); err != nil {
-		logger.Error("failed to write response", err, logger.Fields{"delivery_id": deliveryID})
+		logger.Error(ctx, "failed to write response", err, logger.Fields{"delivery_id": deliveryID})
 	}
 
 	// Log successful webhook processing with client count for debugging
@@ -257,7 +262,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logFields["url_type"] = "pull_request"
 	}
 
-	logger.Info("webhook processed successfully", logFields)
+	logger.Info(ctx, "webhook processed successfully", logFields)
 }
 
 // VerifySignature validates the GitHub webhook signature.
@@ -279,7 +284,7 @@ func VerifySignature(payload []byte, signature, secret string) bool {
 }
 
 // ExtractPRURL extracts the pull request URL from various event types.
-func ExtractPRURL(eventType string, payload map[string]any) string {
+func ExtractPRURL(ctx context.Context, eventType string, payload map[string]any) string {
 	switch eventType {
 	case "pull_request", "pull_request_review", "pull_request_review_comment":
 		if pr, ok := payload["pull_request"].(map[string]any); ok {
@@ -299,12 +304,12 @@ func ExtractPRURL(eventType string, payload map[string]any) string {
 	case "check_run", "check_suite":
 		// Extract PR URLs from check events if available
 		if checkRun, ok := payload["check_run"].(map[string]any); ok {
-			if url := extractPRFromCheckEvent(checkRun, payload, eventType); url != "" {
+			if url := extractPRFromCheckEvent(ctx, checkRun, payload, eventType); url != "" {
 				return url
 			}
 		}
 		if checkSuite, ok := payload["check_suite"].(map[string]any); ok {
-			if url := extractPRFromCheckEvent(checkSuite, payload, eventType); url != "" {
+			if url := extractPRFromCheckEvent(ctx, checkSuite, payload, eventType); url != "" {
 				return url
 			}
 		}
@@ -313,7 +318,7 @@ func ExtractPRURL(eventType string, payload map[string]any) string {
 		for k := range payload {
 			payloadKeys = append(payloadKeys, k)
 		}
-		logger.Warn("no PR URL found in check event", logger.Fields{
+		logger.Warn(ctx, "no PR URL found in check event", logger.Fields{
 			"event_type":      eventType,
 			"has_check_run":   payload["check_run"] != nil,
 			"has_check_suite": payload["check_suite"] != nil,
@@ -326,10 +331,10 @@ func ExtractPRURL(eventType string, payload map[string]any) string {
 }
 
 // extractPRFromCheckEvent extracts PR URL from check_run or check_suite events.
-func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, eventType string) string {
+func extractPRFromCheckEvent(ctx context.Context, checkEvent map[string]any, payload map[string]any, eventType string) string {
 	prs, ok := checkEvent["pull_requests"].([]any)
 	if !ok || len(prs) == 0 {
-		logger.Info("check event has no pull_requests array", logger.Fields{
+		logger.Info(ctx, "check event has no pull_requests array", logger.Fields{
 			"event_type":       eventType,
 			"has_pr_array":     ok,
 			"pr_array_length":  len(prs),
@@ -340,7 +345,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 
 	pr, ok := prs[0].(map[string]any)
 	if !ok {
-		logger.Warn("pull_requests[0] is not a map", logger.Fields{
+		logger.Warn(ctx, "pull_requests[0] is not a map", logger.Fields{
 			"event_type": eventType,
 			"pr_type":    fmt.Sprintf("%T", prs[0]),
 		})
@@ -349,7 +354,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 
 	// Try html_url first
 	if htmlURL, ok := pr["html_url"].(string); ok {
-		logger.Info("extracted PR URL from check event html_url", logger.Fields{
+		logger.Info(ctx, "extracted PR URL from check event html_url", logger.Fields{
 			"event_type": eventType,
 			"pr_url":     htmlURL,
 		})
@@ -359,7 +364,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 	// Fallback: construct from number
 	num, ok := pr["number"].(float64)
 	if !ok {
-		logger.Warn("PR number not found in check event", logger.Fields{
+		logger.Warn(ctx, "PR number not found in check event", logger.Fields{
 			"event_type": eventType,
 			"pr_keys":    getMapKeys(pr),
 		})
@@ -368,7 +373,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 
 	repo, ok := payload["repository"].(map[string]any)
 	if !ok {
-		logger.Warn("repository not found in payload", logger.Fields{
+		logger.Warn(ctx, "repository not found in payload", logger.Fields{
 			"event_type": eventType,
 		})
 		return ""
@@ -376,7 +381,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 
 	repoURL, ok := repo["html_url"].(string)
 	if !ok {
-		logger.Warn("repository html_url not found", logger.Fields{
+		logger.Warn(ctx, "repository html_url not found", logger.Fields{
 			"event_type": eventType,
 			"repo_keys":  getMapKeys(repo),
 		})
@@ -384,7 +389,7 @@ func extractPRFromCheckEvent(checkEvent map[string]any, payload map[string]any, 
 	}
 
 	constructedURL := repoURL + "/pull/" + strconv.Itoa(int(num))
-	logger.Info("constructed PR URL from check event", logger.Fields{
+	logger.Info(ctx, "constructed PR URL from check event", logger.Fields{
 		"event_type": eventType,
 		"pr_url":     constructedURL,
 		"pr_number":  int(num),
@@ -421,4 +426,3 @@ func extractCommitSHA(eventType string, payload map[string]any) string {
 	}
 	return ""
 }
-

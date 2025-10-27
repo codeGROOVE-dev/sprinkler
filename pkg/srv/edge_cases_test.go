@@ -1,6 +1,7 @@
 package srv
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -284,7 +285,7 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 		manyOrgs[i] = fmt.Sprintf("org%d", i)
 	}
 
-	client := NewClient(
+	client := NewClient(context.Background(),
 		"test-id",
 		Subscription{Organization: "*", Username: "testuser"},
 		nil,
@@ -319,7 +320,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 	hub := NewHub()
 
 	for i := range 10 {
-		client := NewClient(
+		client := NewClient(context.Background(),
 			fmt.Sprintf("client%d", i),
 			Subscription{
 				Organization: "*",

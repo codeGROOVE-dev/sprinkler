@@ -32,7 +32,7 @@ func TestConcurrentClientDisconnect(t *testing.T) {
 	const numClients = 10
 	var wg sync.WaitGroup
 
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		wg.Add(1)
 		go func(clientNum int) {
 			defer wg.Done()
@@ -45,7 +45,7 @@ func TestConcurrentClientDisconnect(t *testing.T) {
 			}
 
 			// Create client (we'll use nil for websocket since we're not actually writing)
-			client := NewClient(
+			client := NewClient(ctx,
 				testClientID(clientNum),
 				sub,
 				nil, // WebSocket not needed for this test
@@ -115,7 +115,7 @@ func TestClientCloseIdempotency(t *testing.T) {
 		EventTypes:   []string{"pull_request"},
 	}
 
-	client := NewClient(
+	client := NewClient(ctx,
 		"test-client-close-idempotent",
 		sub,
 		nil,
@@ -127,7 +127,7 @@ func TestClientCloseIdempotency(t *testing.T) {
 	const numGoroutines = 20
 	var wg sync.WaitGroup
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -181,13 +181,13 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 
 	// Create clients
 	clients := make([]*Client, numClients)
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		sub := Subscription{
 			Organization: "testorg",
 			Username:     "testuser",
 			EventTypes:   []string{"pull_request"},
 		}
-		client := NewClient(
+		client := NewClient(ctx,
 			testClientID(i),
 			sub,
 			nil,
@@ -207,7 +207,7 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < numEvents; i++ {
+		for i := range numEvents {
 			event := Event{
 				URL:        "https://github.com/test/repo/pull/123",
 				Type:       "pull_request",
@@ -220,14 +220,14 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 					},
 				},
 			}
-			hub.Broadcast(event, payload)
+			hub.Broadcast(ctx, event, payload)
 			time.Sleep(1 * time.Millisecond)
 		}
 	}()
 
 	// Concurrently disconnect clients (realistic: only via unregister, not direct Close)
 	// In production, Handle() calls hub.Unregister() and the hub handles client.Close()
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -267,7 +267,7 @@ func TestRapidConnectDisconnect(t *testing.T) {
 	const numCycles = 20
 	var wg sync.WaitGroup
 
-	for i := 0; i < numCycles; i++ {
+	for i := range numCycles {
 		wg.Add(1)
 		go func(cycle int) {
 			defer wg.Done()
@@ -278,7 +278,7 @@ func TestRapidConnectDisconnect(t *testing.T) {
 				EventTypes:   []string{"pull_request"},
 			}
 
-			client := NewClient(
+			client := NewClient(ctx,
 				testClientID(cycle),
 				sub,
 				nil,
@@ -326,12 +326,12 @@ func TestHubShutdownWithActiveClients(t *testing.T) {
 
 	// Create several clients
 	const numClients = 10
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		sub := Subscription{
 			Organization: "testorg",
 			Username:     "testuser",
 		}
-		client := NewClient(
+		client := NewClient(ctx,
 			testClientID(i),
 			sub,
 			nil,

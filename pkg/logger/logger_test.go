@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,7 +22,7 @@ func TestLoggerFieldOrdering(t *testing.T) {
 		"middle": "center",
 	}
 
-	Info("test message", fields)
+	Info(context.Background(), "test message", fields)
 
 	output := buf.String()
 
@@ -51,7 +52,7 @@ func TestLoggerWithNilFields(t *testing.T) {
 	SetLogger(logger)
 
 	// Should not panic with nil fields
-	Info("test message", nil)
+	Info(context.Background(), "test message", nil)
 
 	output := buf.String()
 	if !strings.Contains(output, `msg="test message"`) {
@@ -65,7 +66,7 @@ func TestLoggerWithEmptyFields(t *testing.T) {
 	logger := New(&buf)
 	SetLogger(logger)
 
-	Info("test message", Fields{})
+	Info(context.Background(), "test message", Fields{})
 
 	output := buf.String()
 	if !strings.Contains(output, `msg="test message"`) {
@@ -84,7 +85,7 @@ func TestErrorLogger(t *testing.T) {
 	SetLogger(logger)
 
 	err := errors.New("test error")
-	Error("something failed", err, Fields{"code": "500"})
+	Error(context.Background(), "something failed", err, Fields{"code": "500"})
 
 	output := buf.String()
 	if !strings.Contains(output, "level=ERROR") {
@@ -107,7 +108,7 @@ func TestWarnLogger(t *testing.T) {
 	logger := New(&buf)
 	SetLogger(logger)
 
-	Warn("potential issue", Fields{"threshold": "80%"})
+	Warn(context.Background(), "potential issue", Fields{"threshold": "80%"})
 
 	output := buf.String()
 	if !strings.Contains(output, "level=WARN") {
@@ -133,7 +134,7 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 		"url":   "https://example.com?foo=bar&baz=qux",
 	}
 
-	Info("test", fields)
+	Info(context.Background(), "test", fields)
 
 	output := buf.String()
 	if !strings.Contains(output, "path=/etc/passwd") {
@@ -159,7 +160,7 @@ func TestFieldsWithNilValues(t *testing.T) {
 		"string_value": "test",
 	}
 
-	Info("test", fields)
+	Info(context.Background(), "test", fields)
 
 	output := buf.String()
 	if !strings.Contains(output, "nil_value") {
@@ -170,14 +171,15 @@ func TestFieldsWithNilValues(t *testing.T) {
 	}
 }
 
-// TestWithFieldsFormatting tests the WithFieldsf function with format strings
+// TestWithFieldsFormatting tests formatting with Info function
 func TestWithFieldsFormatting(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New(&buf)
 	SetLogger(logger)
 
 	fields := Fields{"user": "alice"}
-	WithFieldsf(fields, "User %s logged in at %d", "bob", 12345)
+	msg := fmt.Sprintf("User %s logged in at %d", "bob", 12345)
+	Info(context.Background(), msg, fields)
 
 	output := buf.String()
 	if !strings.Contains(output, "User bob logged in at 12345") {
@@ -199,7 +201,7 @@ func TestLargeNumberOfFields(t *testing.T) {
 		fields[fmt.Sprintf("field%03d", i)] = i
 	}
 
-	Info("test with many fields", fields)
+	Info(context.Background(), "test with many fields", fields)
 
 	output := buf.String()
 	if !strings.Contains(output, `msg="test with many fields"`) {

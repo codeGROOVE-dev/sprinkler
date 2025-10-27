@@ -1,6 +1,9 @@
 package webhook
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestExtractPRURL(t *testing.T) {
 	tests := []struct {
@@ -78,7 +81,7 @@ func TestExtractPRURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ExtractPRURL(tt.eventType, tt.payload); got != tt.want {
+			if got := ExtractPRURL(context.Background(), tt.eventType, tt.payload); got != tt.want {
 				t.Errorf("ExtractPRURL() = %v, want %v", got, tt.want)
 			}
 		})

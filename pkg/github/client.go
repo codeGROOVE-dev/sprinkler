@@ -467,15 +467,24 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (usernam
 // FindPRsForCommit finds all pull requests associated with a specific commit SHA.
 // This is useful for resolving check_run/check_suite events when GitHub's pull_requests array is empty.
 // Returns a list of PR numbers that contain this commit.
+//
+// IMPORTANT: Due to race conditions in GitHub's indexing, this may initially return an empty array
+// even for commits that ARE on PR branches. We implement retry logic to handle this:
+// - First empty result: retry immediately after 500ms.
+// - Second empty result: return empty (caller should use TTL cache).
 func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA string) ([]int, error) {
 	var prNumbers []int
 	var lastErr error
+	attemptNum := 0
 
 	// Use GitHub's API to list PRs associated with a commit
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/pulls", owner, repo, commitSHA)
 
+	log.Printf("GitHub API: Looking up PRs for commit %s in %s/%s", commitSHA[:8], owner, repo)
+
 	err := retry.Do(
 		func() error {
+			attemptNum++
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 			if err != nil {
 				return fmt.Errorf("failed to create request: %w", err)
@@ -485,6 +494,7 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 			req.Header.Set("Accept", "application/vnd.github.v3+json")
 			req.Header.Set("User-Agent", "webhook-sprinkler/1.0")
 
+			log.Printf("GitHub API: GET %s (attempt %d)", url, attemptNum)
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
@@ -508,7 +518,8 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 			case http.StatusOK:
 				// Success - parse response
 				var prs []struct {
-					Number int `json:"number"`
+					State  string `json:"state"`
+					Number int    `json:"number"`
 				}
 				if err := json.Unmarshal(body, &prs); err != nil {
 					return retry.Unrecoverable(fmt.Errorf("failed to parse PR list response: %w", err))
@@ -518,24 +529,42 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 				for i, pr := range prs {
 					prNumbers[i] = pr.Number
 				}
+
+				// If empty on first attempt, retry once after short delay
+				// This handles GitHub's indexing race condition
+				if len(prNumbers) == 0 && attemptNum == 1 {
+					log.Printf("GitHub API: Empty result on first attempt for commit %s - will retry once (race condition?)", commitSHA[:8])
+					time.Sleep(500 * time.Millisecond)
+					return errors.New("empty result on first attempt, retrying")
+				}
+
+				if len(prNumbers) == 0 {
+					log.Printf("GitHub API: Empty result for commit %s after %d attempts - "+
+						"may be push to main or PR not yet indexed", commitSHA[:8], attemptNum)
+				} else {
+					log.Printf("GitHub API: Found %d PR(s) for commit %s: %v", len(prNumbers), commitSHA[:8], prNumbers)
+				}
 				return nil
 
 			case http.StatusNotFound:
 				// Commit not found - could be a commit to main or repo doesn't exist
+				log.Printf("GitHub API: Commit %s not found (404) - may not exist or indexing delayed", commitSHA[:8])
 				return retry.Unrecoverable(fmt.Errorf("commit not found: %s", commitSHA))
 
 			case http.StatusUnauthorized, http.StatusForbidden:
 				// Don't retry on auth errors
+				log.Printf("GitHub API: Auth failed (%d) for commit %s", resp.StatusCode, commitSHA[:8])
 				return retry.Unrecoverable(fmt.Errorf("authentication failed: status %d", resp.StatusCode))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API: /commits/%s/pulls server error %d (will retry)", commitSHA, resp.StatusCode)
+				log.Printf("GitHub API: Server error %d for commit %s (will retry)", resp.StatusCode, commitSHA[:8])
 				return lastErr
 
 			default:
 				// Don't retry on other errors
+				log.Printf("GitHub API: Unexpected status %d for commit %s: %s", resp.StatusCode, commitSHA[:8], string(body))
 				return retry.Unrecoverable(fmt.Errorf("unexpected status: %d, body: %s", resp.StatusCode, string(body)))
 			}
 		},
@@ -551,6 +580,5 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 		return nil, err
 	}
 
-	log.Printf("GitHub API: Found %d PR(s) for commit %s in %s/%s", len(prNumbers), commitSHA, owner, repo)
 	return prNumbers, nil
 }
