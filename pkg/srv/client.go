@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -13,11 +14,34 @@ import (
 )
 
 // Client represents a connected WebSocket client with their subscription preferences.
+//
 // Connection management follows a simple pattern:
 //   - ONE goroutine (Run) handles ALL writes to avoid concurrent write issues
 //   - Server sends pings every pingInterval to detect dead connections
 //   - Client responds with pongs; read loop resets deadline on any message
 //   - Read loop (in websocket.go) detects disconnects and closes the connection
+//
+// Cleanup coordination (CRITICAL FOR THREAD SAFETY):
+//   Multiple goroutines can trigger cleanup concurrently:
+//     1. Handle() defer in websocket.go calls Hub.Unregister() (async via channel)
+//     2. Handle() defer in websocket.go calls closeWebSocket() (closes WS connection)
+//     3. Client.Run() defer calls client.Close() when context is cancelled
+//     4. Hub.Run() processes unregister message and calls client.Close()
+//     5. Hub.cleanup() during shutdown calls client.Close() for all clients
+//
+//   Thread safety is ensured by:
+//     - Close() uses sync.Once to ensure channels are closed exactly once
+//     - closed atomic flag allows checking if client is closing (safe from any goroutine)
+//     - Hub checks closed flag before sending to avoid race with channel close
+//     - closeWebSocket() does NOT send to client channels (would race with Close)
+//
+//   Cleanup flow when a client disconnects:
+//     1. Handle() read loop exits (EOF, timeout, or error)
+//     2. defer cancel() signals Client.Run() via context
+//     3. defer Hub.Unregister(clientID) sends message to hub (returns immediately)
+//     4. defer closeWebSocket() closes the WebSocket connection only
+//     5. Client.Run() sees context cancellation, exits, calls defer client.Close()
+//     6. Hub.Run() processes unregister, calls client.Close() (idempotent via sync.Once)
 type Client struct {
 	conn         *websocket.Conn
 	send         chan Event
@@ -28,6 +52,7 @@ type Client struct {
 	ID           string
 	subscription Subscription
 	closeOnce    sync.Once
+	closed       uint32 // Atomic flag: 1 if closed, 0 if open
 }
 
 // NewClient creates a new client.
@@ -156,8 +181,18 @@ func (c *Client) write(msg any, timeout time.Duration) error {
 // Close gracefully closes the client.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
+		// Set closed flag BEFORE closing channels
+		// This allows other goroutines to check if client is closing
+		atomic.StoreUint32(&c.closed, 1)
+
 		close(c.done)
 		close(c.send)
 		close(c.control)
 	})
+}
+
+// IsClosed returns true if the client is closed or closing.
+// Safe to call from any goroutine.
+func (c *Client) IsClosed() bool {
+	return atomic.LoadUint32(&c.closed) != 0
 }
