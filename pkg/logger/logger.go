@@ -4,7 +4,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -23,6 +22,7 @@ var (
 	hostname string
 )
 
+//nolint:gochecknoinits // Required to initialize default logger and hostname on package load
 func init() {
 	var err error
 	hostname, err = os.Hostname()
@@ -59,48 +59,53 @@ func New(w io.Writer) *slog.Logger {
 	return logger.With("instance", hostname)
 }
 
-// SetDefault sets the default logger.
-func SetDefault(l *slog.Logger) {
-	defaultLogger = l
-}
-
-// SetLogger sets the default logger (alias for SetDefault).
+// SetLogger sets the default logger.
 func SetLogger(l *slog.Logger) {
 	defaultLogger = l
 }
 
-// Default returns the default logger.
-func Default() *slog.Logger {
-	return defaultLogger
-}
-
-// Hostname returns the cached hostname.
-func Hostname() string {
-	return hostname
-}
-
 // Info logs an info message with optional fields.
-func Info(msg string, fields Fields) {
-	defaultLogger.LogAttrs(context.Background(), slog.LevelInfo, msg, attrsFromFields(fields)...)
+//
+//nolint:contextcheck // Context is used for logging only, not passed to callees
+func Info(ctx context.Context, msg string, fields Fields) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defaultLogger.LogAttrs(ctx, slog.LevelInfo, msg, attrsFromFields(fields)...)
 }
 
 // Warn logs a warning message with optional fields.
-func Warn(msg string, fields Fields) {
-	defaultLogger.LogAttrs(context.Background(), slog.LevelWarn, msg, attrsFromFields(fields)...)
+//
+//nolint:contextcheck // Context is used for logging only, not passed to callees
+func Warn(ctx context.Context, msg string, fields Fields) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defaultLogger.LogAttrs(ctx, slog.LevelWarn, msg, attrsFromFields(fields)...)
 }
 
 // Error logs an error message with optional fields.
-func Error(msg string, err error, fields Fields) {
+//
+//nolint:contextcheck // Context is used for logging only, not passed to callees
+func Error(ctx context.Context, msg string, err error, fields Fields) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if fields == nil {
 		fields = Fields{}
 	}
 	fields["error"] = err.Error()
-	defaultLogger.LogAttrs(context.Background(), slog.LevelError, msg, attrsFromFields(fields)...)
+	defaultLogger.LogAttrs(ctx, slog.LevelError, msg, attrsFromFields(fields)...)
 }
 
 // Debug logs a debug message with optional fields.
-func Debug(msg string, fields Fields) {
-	defaultLogger.LogAttrs(context.Background(), slog.LevelDebug, msg, attrsFromFields(fields)...)
+//
+//nolint:contextcheck // Context is used for logging only, not passed to callees
+func Debug(ctx context.Context, msg string, fields Fields) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defaultLogger.LogAttrs(ctx, slog.LevelDebug, msg, attrsFromFields(fields)...)
 }
 
 // attrsFromFields converts Fields to slog.Attr slice.
@@ -128,11 +133,4 @@ func LogAt(level slog.Level, skip int, msg string, fields Fields) {
 	)
 	r.AddAttrs(attrsFromFields(fields)...)
 	_ = defaultLogger.Handler().Handle(context.Background(), r) //nolint:errcheck // Best effort logging
-}
-
-// WithFieldsf provides backward compatibility for tests.
-// Deprecated: Use Info/Warn/Error with Fields instead.
-func WithFieldsf(fields Fields, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	Info(msg, fields)
 }

@@ -15,6 +15,7 @@ func TestHub(t *testing.T) {
 
 	// Test registering clients - properly initialize using NewClient
 	client1 := NewClient(
+		ctx,
 		"client1",
 		Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
 		nil, // No websocket connection for unit test
@@ -23,6 +24,7 @@ func TestHub(t *testing.T) {
 	)
 
 	client2 := NewClient(
+		ctx,
 		"client2",
 		Subscription{Organization: "myorg"},
 		nil, // No websocket connection for unit test
@@ -65,7 +67,7 @@ func TestHub(t *testing.T) {
 		},
 	}
 
-	hub.Broadcast(event, payload)
+	hub.Broadcast(ctx, event, payload)
 
 	// Both clients should receive the event
 	select {

@@ -26,7 +26,7 @@ func TestConnectionLimiterReservation(t *testing.T) {
 	var commitFailed int32   // How many times CommitReservation failed
 
 	// Launch many goroutines simultaneously trying to reserve and commit connections
-	for i := 0; i < concurrent; i++ {
+	for i := range concurrent {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -120,7 +120,7 @@ func TestConnectionLimiterTOCTOU_Documentation(t *testing.T) {
 
 	// Launch many goroutines simultaneously trying to add connections
 	// This simulates multiple HTTP handlers racing to add connections
-	for i := 0; i < concurrent; i++ {
+	for i := range concurrent {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -182,14 +182,14 @@ func TestConnectionLimiterConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Test concurrent Add/Remove from multiple IPs
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			ip := "192.168.1." + string(rune('1'+id))
 
 			// Rapid add/remove cycles
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				if limiter.Add(ip) {
 					time.Sleep(time.Microsecond)
 					limiter.Remove(ip)
@@ -221,14 +221,14 @@ func TestRateLimiterConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Test concurrent Allow from multiple IPs
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			ip := "192.168.1." + string(rune('1'+id))
 
 			// Rapid allow checks
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				_ = limiter.Allow(ip)
 			}
 		}(i)
@@ -263,7 +263,7 @@ func TestConnectionLimiterReservationCancellation(t *testing.T) {
 	}
 
 	// Cancel half of them
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		limiter.CancelReservation(tokens[i])
 	}
 
@@ -334,15 +334,13 @@ func TestConnectionLimiterTotalLimit(t *testing.T) {
 	defer limiter.Stop()
 
 	// Reserve from two different IPs
-	var tokens []string
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ip := "192.168.1." + string(rune('1'+i))
-		for j := 0; j < 5; j++ {
+		for range 5 {
 			token := limiter.Reserve(ip)
 			if token == "" {
 				t.Fatalf("Failed to reserve slot for %s", ip)
 			}
-			tokens = append(tokens, token)
 			if !limiter.CommitReservation(token) {
 				t.Fatalf("Failed to commit reservation for %s", ip)
 			}

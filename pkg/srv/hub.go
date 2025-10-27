@@ -14,11 +14,11 @@ import (
 // Event represents a GitHub webhook event that will be broadcast to clients.
 // It contains the PR URL, timestamp, event type, and delivery ID from GitHub.
 type Event struct {
-	URL        string    `json:"url"`                    // Pull request URL (or repo URL for check events with race condition)
-	Timestamp  time.Time `json:"timestamp"`              // When the event occurred
-	Type       string    `json:"type"`                   // GitHub event type (e.g., "pull_request")
-	DeliveryID string    `json:"delivery_id,omitempty"`  // GitHub webhook delivery ID (unique per webhook)
-	CommitSHA  string    `json:"commit_sha,omitempty"`   // Commit SHA for check events (used to look up PR when URL is repo-only)
+	URL        string    `json:"url"`                   // Pull request URL (or repo URL for check events with race condition)
+	Timestamp  time.Time `json:"timestamp"`             // When the event occurred
+	Type       string    `json:"type"`                  // GitHub event type (e.g., "pull_request")
+	DeliveryID string    `json:"delivery_id,omitempty"` // GitHub webhook delivery ID (unique per webhook)
+	CommitSHA  string    `json:"commit_sha,omitempty"`  // Commit SHA for check events (used to look up PR when URL is repo-only)
 }
 
 // Hub manages WebSocket clients and event broadcasting.
@@ -81,11 +81,11 @@ func NewHub() *Hub {
 // The context should be passed from main for proper lifecycle management.
 func (h *Hub) Run(ctx context.Context) {
 	defer close(h.stopped)
-	defer h.cleanup()
+	defer h.cleanup(ctx)
 
-	logger.Info("========================================", nil)
-	logger.Info("HUB STARTED - Fresh hub with 0 clients", nil)
-	logger.Info("========================================", nil)
+	logger.Info(ctx, "========================================", nil)
+	logger.Info(ctx, "HUB STARTED - Fresh hub with 0 clients", nil)
+	logger.Info(ctx, "========================================", nil)
 
 	// Periodic client count logging (every minute)
 	ticker := time.NewTicker(1 * time.Minute)
@@ -94,10 +94,10 @@ func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("hub shutting down", nil)
+			logger.Info(ctx, "hub shutting down", nil)
 			return
 		case <-h.stop:
-			logger.Info("hub stop requested", nil)
+			logger.Info(ctx, "hub stop requested", nil)
 			return
 
 		case <-ticker.C:
@@ -108,7 +108,7 @@ func (h *Hub) Run(ctx context.Context) {
 				clientDetails = append(clientDetails, fmt.Sprintf("%s@%s", client.subscription.Username, client.subscription.Organization))
 			}
 			h.mu.RUnlock()
-			logger.Info("⏱️  PERIODIC CHECK", logger.Fields{
+			logger.Info(ctx, "⏱️  PERIODIC CHECK", logger.Fields{
 				"total_clients": count,
 				"clients":       clientDetails,
 			})
@@ -118,7 +118,7 @@ func (h *Hub) Run(ctx context.Context) {
 			h.clients[client.ID] = client
 			totalClients := len(h.clients)
 			h.mu.Unlock()
-			logger.Info("CLIENT REGISTERED", logger.Fields{
+			logger.Info(ctx, "CLIENT REGISTERED", logger.Fields{
 				"client_id":     client.ID,
 				"org":           client.subscription.Organization,
 				"user":          client.subscription.Username,
@@ -132,7 +132,7 @@ func (h *Hub) Run(ctx context.Context) {
 				totalClients := len(h.clients)
 				client.Close()
 				h.mu.Unlock()
-				logger.Info("CLIENT UNREGISTERED", logger.Fields{
+				logger.Info(ctx, "CLIENT UNREGISTERED", logger.Fields{
 					"client_id":     clientID,
 					"org":           client.subscription.Organization,
 					"user":          client.subscription.Username,
@@ -140,7 +140,7 @@ func (h *Hub) Run(ctx context.Context) {
 				})
 			} else {
 				h.mu.Unlock()
-				logger.Warn("attempted to unregister unknown client", logger.Fields{
+				logger.Warn(ctx, "attempted to unregister unknown client", logger.Fields{
 					"client_id": clientID,
 				})
 			}
@@ -163,7 +163,7 @@ func (h *Hub) Run(ctx context.Context) {
 					// Try to send (safe against closed channels)
 					if h.trySendEvent(client, msg.event) {
 						matched++
-						logger.Info("delivered event to client", logger.Fields{
+						logger.Info(ctx, "delivered event to client", logger.Fields{
 							"client_id":   client.ID,
 							"user":        client.subscription.Username,
 							"org":         client.subscription.Organization,
@@ -173,22 +173,22 @@ func (h *Hub) Run(ctx context.Context) {
 						})
 					} else {
 						dropped++
-						logger.Warn("dropped event for client: channel full or closed", logger.Fields{
+						logger.Warn(ctx, "dropped event for client: channel full or closed", logger.Fields{
 							"client_id": client.ID,
 						})
 					}
 				}
 			}
 			if totalClients == 0 {
-				logger.Warn("⚠️⚠️⚠️  broadcast with ZERO clients connected ⚠️⚠️⚠️", nil)
-				logger.Warn("⚠️  Event will be LOST", logger.Fields{
+				logger.Warn(ctx, "⚠️⚠️⚠️  broadcast with ZERO clients connected ⚠️⚠️⚠️", nil)
+				logger.Warn(ctx, "⚠️  Event will be LOST", logger.Fields{
 					"event_type":  msg.event.Type,
 					"delivery_id": msg.event.DeliveryID,
 					"pr_url":      msg.event.URL,
 				})
-				logger.Warn("⚠️  Possible reasons: fresh deployment, all clients disconnected, or network issue", nil)
+				logger.Warn(ctx, "⚠️  Possible reasons: fresh deployment, all clients disconnected, or network issue", nil)
 			}
-			logger.Info("broadcast event", logger.Fields{
+			logger.Info(ctx, "broadcast event", logger.Fields{
 				"event_type":    msg.event.Type,
 				"delivery_id":   msg.event.DeliveryID,
 				"matched":       matched,
@@ -200,12 +200,12 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 // Broadcast sends an event to all matching clients.
-func (h *Hub) Broadcast(event Event, payload map[string]any) {
+func (h *Hub) Broadcast(ctx context.Context, event Event, payload map[string]any) {
 	select {
 	case h.broadcast <- broadcastMsg{event: event, payload: payload}:
 	default:
 		// Hub is at capacity or shutting down, drop the message
-		logger.Warn("dropping broadcast: hub at capacity or shutting down", nil)
+		logger.Warn(ctx, "dropping broadcast: hub at capacity or shutting down", nil)
 	}
 }
 
@@ -256,7 +256,7 @@ func (h *Hub) ClientCount() int {
 //
 // Note: There's still a tiny window between IsClosed() check and send where
 // Close() could be called, so we keep recover() as a safety net.
-func (h *Hub) trySendEvent(client *Client, event Event) (sent bool) {
+func (*Hub) trySendEvent(client *Client, event Event) (sent bool) {
 	// Check if client is closed before attempting send
 	// This prevents most races with client.Close()
 	if client.IsClosed() {
@@ -284,20 +284,20 @@ func (h *Hub) trySendEvent(client *Client, event Event) (sent bool) {
 //
 // CRITICAL THREADING NOTE:
 // This function MUST NOT send to client channels (send/control) because of race conditions:
-//  - Client.Close() can be called concurrently from multiple places (Handle defer, Run defer, etc.)
-//  - Once Close() starts, it closes all channels atomically
-//  - Trying to send to a closed channel panics, even with select/default
-//  - select/default only protects against FULL channels, not CLOSED channels
+//   - Client.Close() can be called concurrently from multiple places (Handle defer, Run defer, etc.)
+//   - Once Close() starts, it closes all channels atomically
+//   - Trying to send to a closed channel panics, even with select/default
+//   - select/default only protects against FULL channels, not CLOSED channels
 //
 // Instead, we rely on:
-//  - WebSocket connection close will signal the client
-//  - Client.Run() will detect context cancellation and exit gracefully
-//  - client.Close() is idempotent (sync.Once) so safe to call multiple times
-func (h *Hub) cleanup() {
+//   - WebSocket connection close will signal the client
+//   - Client.Run() will detect context cancellation and exit gracefully
+//   - client.Close() is idempotent (sync.Once) so safe to call multiple times
+func (h *Hub) cleanup(ctx context.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	logger.Info("Hub cleanup: closing client connections", logger.Fields{
+	logger.Info(ctx, "Hub cleanup: closing client connections", logger.Fields{
 		"client_count": len(h.clients),
 	})
 
@@ -305,9 +305,9 @@ func (h *Hub) cleanup() {
 	// The WebSocket connection close and context cancellation are sufficient signals.
 	for id, client := range h.clients {
 		client.Close()
-		logger.Info("closed client during hub cleanup", logger.Fields{"client_id": id})
+		logger.Info(ctx, "closed client during hub cleanup", logger.Fields{"client_id": id})
 	}
 
 	h.clients = nil
-	logger.Info("Hub cleanup complete", nil)
+	logger.Info(ctx, "Hub cleanup complete", nil)
 }

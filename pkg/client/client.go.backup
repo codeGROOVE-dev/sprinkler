@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,12 +93,12 @@ type Client struct {
 	retries    int
 
 	// Cache for commit SHA to PR number lookups (for check event race condition)
-	commitPRCache       map[string][]int     // key: "owner/repo:sha", value: PR numbers
-	commitPRCacheExpiry map[string]time.Time // key: "owner/repo:sha", value: expiry time (only for empty results)
-	commitCacheKeys     []string             // track insertion order for LRU eviction
-	cacheMu             sync.RWMutex
-	maxCacheSize        int
-	emptyResultTTL      time.Duration // TTL for empty results (to handle GitHub indexing race)
+	commitPRCache      map[string][]int       // key: "owner/repo:sha", value: PR numbers
+	commitPRCacheExpiry map[string]time.Time  // key: "owner/repo:sha", value: expiry time (only for empty results)
+	commitCacheKeys    []string               // track insertion order for LRU eviction
+	cacheMu            sync.RWMutex
+	maxCacheSize       int
+	emptyResultTTL     time.Duration          // TTL for empty results (to handle GitHub indexing race)
 }
 
 // New creates a new robust WebSocket client.
@@ -543,8 +542,6 @@ func (c *Client) sendPings(ctx context.Context) {
 }
 
 // readEvents reads and processes events from the WebSocket with responsive shutdown.
-//
-//nolint:gocognit,revive,maintidx // Complex event processing with cache management is intentional and well-documented
 func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 	for {
 		// Check for context cancellation first
@@ -647,68 +644,8 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 		eventNum := c.eventCount
 		c.mu.Unlock()
 
-		// Populate cache from pull_request events to prevent cache misses
-		// This ensures check events arriving shortly after PR creation can find the PR
-		//nolint:nestif // Cache population logic requires nested validation
-		if event.Type == "pull_request" && event.CommitSHA != "" && strings.Contains(event.URL, "/pull/") {
-			// Extract owner/repo/pr_number from URL
-			parts := strings.Split(event.URL, "/")
-			if len(parts) >= 7 && parts[2] == "github.com" && parts[5] == "pull" {
-				owner := parts[3]
-				repo := parts[4]
-				prNum, err := strconv.Atoi(parts[6])
-				if err == nil && prNum > 0 {
-					key := owner + "/" + repo + ":" + event.CommitSHA
-
-					c.cacheMu.Lock()
-					// Check if cache entry exists
-					existing, exists := c.commitPRCache[key]
-					if !exists {
-						// New cache entry
-						c.commitCacheKeys = append(c.commitCacheKeys, key)
-						c.commitPRCache[key] = []int{prNum}
-						c.logger.Debug("Populated cache from pull_request event",
-							"commit_sha", event.CommitSHA,
-							"owner", owner,
-							"repo", repo,
-							"pr_number", prNum)
-
-						// Evict oldest 25% if cache is full
-						if len(c.commitCacheKeys) > c.maxCacheSize { //nolint:revive // Cache eviction logic intentionally nested
-							n := c.maxCacheSize / 4
-							for i := range n {
-								delete(c.commitPRCache, c.commitCacheKeys[i])
-							}
-							c.commitCacheKeys = c.commitCacheKeys[n:]
-						}
-					} else {
-						// Check if PR number already in list
-						found := false
-						for _, existingPR := range existing {
-							if existingPR == prNum { //nolint:revive // PR deduplication requires nested check
-								found = true
-								break
-							}
-						}
-						if !found { //nolint:revive // Cache update requires nested check
-							// Add PR to existing cache entry
-							c.commitPRCache[key] = append(existing, prNum)
-							c.logger.Debug("Added PR to existing cache entry",
-								"commit_sha", event.CommitSHA,
-								"owner", owner,
-								"repo", repo,
-								"pr_number", prNum,
-								"total_prs", len(c.commitPRCache[key]))
-						}
-					}
-					c.cacheMu.Unlock()
-				}
-			}
-		}
-
 		// Handle check events with repo-only URLs (GitHub race condition)
 		// Automatically expand into per-PR events using GitHub API with caching
-		//nolint:nestif // Check event expansion requires nested validation and cache management
 		if (event.Type == "check_run" || event.Type == "check_suite") && event.CommitSHA != "" && !strings.Contains(event.URL, "/pull/") {
 			// Extract owner/repo from URL
 			parts := strings.Split(event.URL, "/")
@@ -754,7 +691,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 					} else {
 						// Cache the result (even if empty)
 						c.cacheMu.Lock()
-						if _, exists := c.commitPRCache[key]; !exists { //nolint:revive // Cache management requires nested check
+						if _, exists := c.commitPRCache[key]; !exists {
 							c.commitCacheKeys = append(c.commitCacheKeys, key)
 							// Evict oldest 25% if cache is full
 							if len(c.commitCacheKeys) > c.maxCacheSize {

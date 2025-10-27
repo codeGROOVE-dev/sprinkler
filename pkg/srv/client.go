@@ -22,26 +22,27 @@ import (
 //   - Read loop (in websocket.go) detects disconnects and closes the connection
 //
 // Cleanup coordination (CRITICAL FOR THREAD SAFETY):
-//   Multiple goroutines can trigger cleanup concurrently:
-//     1. Handle() defer in websocket.go calls Hub.Unregister() (async via channel)
-//     2. Handle() defer in websocket.go calls closeWebSocket() (closes WS connection)
-//     3. Client.Run() defer calls client.Close() when context is cancelled
-//     4. Hub.Run() processes unregister message and calls client.Close()
-//     5. Hub.cleanup() during shutdown calls client.Close() for all clients
 //
-//   Thread safety is ensured by:
-//     - Close() uses sync.Once to ensure channels are closed exactly once
-//     - closed atomic flag allows checking if client is closing (safe from any goroutine)
-//     - Hub checks closed flag before sending to avoid race with channel close
-//     - closeWebSocket() does NOT send to client channels (would race with Close)
+//	Multiple goroutines can trigger cleanup concurrently:
+//	  1. Handle() defer in websocket.go calls Hub.Unregister() (async via channel)
+//	  2. Handle() defer in websocket.go calls closeWebSocket() (closes WS connection)
+//	  3. Client.Run() defer calls client.Close() when context is cancelled
+//	  4. Hub.Run() processes unregister message and calls client.Close()
+//	  5. Hub.cleanup() during shutdown calls client.Close() for all clients
 //
-//   Cleanup flow when a client disconnects:
-//     1. Handle() read loop exits (EOF, timeout, or error)
-//     2. defer cancel() signals Client.Run() via context
-//     3. defer Hub.Unregister(clientID) sends message to hub (returns immediately)
-//     4. defer closeWebSocket() closes the WebSocket connection only
-//     5. Client.Run() sees context cancellation, exits, calls defer client.Close()
-//     6. Hub.Run() processes unregister, calls client.Close() (idempotent via sync.Once)
+//	Thread safety is ensured by:
+//	  - Close() uses sync.Once to ensure channels are closed exactly once
+//	  - closed atomic flag allows checking if client is closing (safe from any goroutine)
+//	  - Hub checks closed flag before sending to avoid race with channel close
+//	  - closeWebSocket() does NOT send to client channels (would race with Close)
+//
+//	Cleanup flow when a client disconnects:
+//	  1. Handle() read loop exits (EOF, timeout, or error)
+//	  2. defer cancel() signals Client.Run() via context
+//	  3. defer Hub.Unregister(clientID) sends message to hub (returns immediately)
+//	  4. defer closeWebSocket() closes the WebSocket connection only
+//	  5. Client.Run() sees context cancellation, exits, calls defer client.Close()
+//	  6. Hub.Run() processes unregister, calls client.Close() (idempotent via sync.Once)
 type Client struct {
 	conn         *websocket.Conn
 	send         chan Event
@@ -56,13 +57,13 @@ type Client struct {
 }
 
 // NewClient creates a new client.
-func NewClient(id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string) *Client {
+func NewClient(ctx context.Context, id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string) *Client {
 	// Limit the number of orgs to prevent memory exhaustion
 	const maxOrgs = 1000
 	orgsToProcess := userOrgs
 	if len(userOrgs) > maxOrgs {
 		orgsToProcess = userOrgs[:maxOrgs]
-		logger.Warn("user has too many organizations, limiting", logger.Fields{
+		logger.Warn(ctx, "user has too many organizations, limiting", logger.Fields{
 			"user_org_count": len(userOrgs),
 			"max_orgs":       maxOrgs,
 		})
@@ -109,11 +110,11 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Debug("client context cancelled, shutting down", logger.Fields{"client_id": c.ID})
+			logger.Debug(ctx, "client context cancelled, shutting down", logger.Fields{"client_id": c.ID})
 			return
 
 		case <-c.done:
-			logger.Debug("client done signal received", logger.Fields{"client_id": c.ID})
+			logger.Debug(ctx, "client done signal received", logger.Fields{"client_id": c.ID})
 			return
 
 		case <-pingTicker.C:
@@ -125,7 +126,7 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 			}
 
 			if err := c.write(ping, writeTimeout); err != nil {
-				logger.Warn("client ping failed", logger.Fields{
+				logger.Warn(ctx, "client ping failed", logger.Fields{
 					"client_id": c.ID,
 					"error":     err.Error(),
 				})
@@ -134,13 +135,13 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 
 		case ctrl, ok := <-c.control:
 			if !ok {
-				logger.Debug("client control channel closed", logger.Fields{"client_id": c.ID})
+				logger.Debug(ctx, "client control channel closed", logger.Fields{"client_id": c.ID})
 				return
 			}
 
 			// Send control message (pong, shutdown notice, etc.)
 			if err := c.write(ctrl, writeTimeout); err != nil {
-				logger.Warn("client control message send failed", logger.Fields{
+				logger.Warn(ctx, "client control message send failed", logger.Fields{
 					"client_id": c.ID,
 					"error":     err.Error(),
 				})
@@ -149,13 +150,13 @@ func (c *Client) Run(ctx context.Context, pingInterval, writeTimeout time.Durati
 
 		case event, ok := <-c.send:
 			if !ok {
-				logger.Debug("client send channel closed", logger.Fields{"client_id": c.ID})
+				logger.Debug(ctx, "client send channel closed", logger.Fields{"client_id": c.ID})
 				return
 			}
 
 			// Write event (hub already logged delivery, so we only log failures here)
 			if err := c.write(event, writeTimeout); err != nil {
-				logger.Warn("client event send failed", logger.Fields{
+				logger.Warn(ctx, "client event send failed", logger.Fields{
 					"client_id":  c.ID,
 					"event_type": event.Type,
 					"error":      err.Error(),
