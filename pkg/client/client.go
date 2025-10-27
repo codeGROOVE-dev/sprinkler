@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/github"
 	"golang.org/x/net/websocket"
 )
 
@@ -45,8 +46,9 @@ type Event struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Raw        map[string]any
 	Type       string `json:"type"`
-	URL        string `json:"url"`
+	URL        string `json:"url"` // PR URL (or repo URL for check events with race condition)
 	DeliveryID string `json:"delivery_id,omitempty"`
+	CommitSHA  string `json:"commit_sha,omitempty"` // Commit SHA for check events
 }
 
 // Config holds the configuration for the client.
@@ -85,9 +87,16 @@ type Client struct {
 	ws         *websocket.Conn
 	stopCh     chan struct{}
 	stoppedCh  chan struct{}
-	writeCh    chan any // Channel for serializing all writes
+	stopOnce   sync.Once // Ensures Stop() is only executed once
+	writeCh    chan any  // Channel for serializing all writes
 	eventCount int
 	retries    int
+
+	// Cache for commit SHA to PR number lookups (for check event race condition)
+	commitPRCache   map[string][]int // key: "owner/repo:sha", value: PR numbers
+	commitCacheKeys []string         // track insertion order for LRU eviction
+	cacheMu         sync.RWMutex
+	maxCacheSize    int
 }
 
 // New creates a new robust WebSocket client.
@@ -118,10 +127,13 @@ func New(config Config) (*Client, error) {
 	}
 
 	return &Client{
-		config:    config,
-		stopCh:    make(chan struct{}),
-		stoppedCh: make(chan struct{}),
-		logger:    logger,
+		config:          config,
+		stopCh:          make(chan struct{}),
+		stoppedCh:       make(chan struct{}),
+		logger:          logger,
+		commitPRCache:   make(map[string][]int),
+		commitCacheKeys: make([]string, 0, 512),
+		maxCacheSize:    512,
 	}, nil
 }
 
@@ -220,16 +232,27 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the client.
+// Safe to call multiple times - only the first call will take effect.
+// Also safe to call before Start() or if Start() was never called.
 func (c *Client) Stop() {
-	close(c.stopCh)
-	c.mu.Lock()
-	if c.ws != nil {
-		if closeErr := c.ws.Close(); closeErr != nil {
-			c.logger.Error("Error closing websocket on shutdown", "error", closeErr)
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+		c.mu.Lock()
+		if c.ws != nil {
+			if closeErr := c.ws.Close(); closeErr != nil {
+				c.logger.Error("Error closing websocket on shutdown", "error", closeErr)
+			}
 		}
-	}
-	c.mu.Unlock()
-	<-c.stoppedCh
+		c.mu.Unlock()
+
+		// Wait for Start() to finish, but with timeout in case Start() was never called
+		select {
+		case <-c.stoppedCh:
+			// Start() completed normally
+		case <-time.After(100 * time.Millisecond):
+			// Start() was never called or hasn't started yet - that's ok
+		}
+	})
 }
 
 // connect establishes a WebSocket connection and handles events.
@@ -608,10 +631,110 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 			event.DeliveryID = deliveryID
 		}
 
+		if commitSHA, ok := response["commit_sha"].(string); ok {
+			event.CommitSHA = commitSHA
+		}
+
 		c.mu.Lock()
 		c.eventCount++
 		eventNum := c.eventCount
 		c.mu.Unlock()
+
+		// Handle check events with repo-only URLs (GitHub race condition)
+		// Automatically expand into per-PR events using GitHub API with caching
+		if (event.Type == "check_run" || event.Type == "check_suite") && event.CommitSHA != "" && !strings.Contains(event.URL, "/pull/") {
+			// Extract owner/repo from URL
+			parts := strings.Split(event.URL, "/")
+			if len(parts) >= 5 && parts[2] == "github.com" {
+				owner := parts[3]
+				repo := parts[4]
+				key := owner + "/" + repo + ":" + event.CommitSHA
+
+				// Check cache first
+				c.cacheMu.RLock()
+				cached, ok := c.commitPRCache[key]
+				c.cacheMu.RUnlock()
+
+				var prs []int
+				if ok {
+					// Cache hit - return copy to prevent external modifications
+					prs = make([]int, len(cached))
+					copy(prs, cached)
+					c.logger.Info("Check event with repo URL - using cached PR lookup",
+						"commit_sha", event.CommitSHA,
+						"repo_url", event.URL,
+						"type", event.Type,
+						"pr_count", len(prs),
+						"cache_hit", true)
+				} else {
+					// Cache miss - look up via GitHub API
+					c.logger.Info("Check event with repo URL - looking up PRs via GitHub API",
+						"commit_sha", event.CommitSHA,
+						"repo_url", event.URL,
+						"type", event.Type,
+						"cache_hit", false)
+
+					gh := github.NewClient(c.config.Token)
+					var err error
+					prs, err = gh.FindPRsForCommit(ctx, owner, repo, event.CommitSHA)
+					if err != nil {
+						c.logger.Warn("Failed to look up PRs for commit",
+							"commit_sha", event.CommitSHA,
+							"owner", owner,
+							"repo", repo,
+							"error", err)
+						// Don't cache errors - try again next time
+					} else {
+						// Cache the result (even if empty)
+						c.cacheMu.Lock()
+						if _, exists := c.commitPRCache[key]; !exists {
+							c.commitCacheKeys = append(c.commitCacheKeys, key)
+							// Evict oldest 25% if cache is full
+							if len(c.commitCacheKeys) > c.maxCacheSize {
+								n := c.maxCacheSize / 4
+								for i := range n {
+									delete(c.commitPRCache, c.commitCacheKeys[i])
+								}
+								c.commitCacheKeys = c.commitCacheKeys[n:]
+							}
+						}
+						// Store copy to prevent external modifications
+						cached := make([]int, len(prs))
+						copy(cached, prs)
+						c.commitPRCache[key] = cached
+						c.cacheMu.Unlock()
+
+						c.logger.Info("Cached PR lookup result",
+							"commit_sha", event.CommitSHA,
+							"pr_count", len(prs))
+					}
+				}
+
+				// Emit events for each PR found
+				if len(prs) > 0 {
+					for _, n := range prs {
+						e := event // Copy the event
+						e.URL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, n)
+
+						if c.config.OnEvent != nil {
+							c.logger.Info("Event received (expanded from commit)",
+								"timestamp", e.Timestamp.Format("15:04:05"),
+								"event_number", eventNum,
+								"type", e.Type,
+								"url", e.URL,
+								"commit_sha", e.CommitSHA,
+								"delivery_id", e.DeliveryID)
+							c.config.OnEvent(e)
+						}
+					}
+					continue // Skip the normal event handling since we expanded it
+				}
+				c.logger.Info("No PRs found for commit - may be push to main",
+					"commit_sha", event.CommitSHA,
+					"owner", owner,
+					"repo", repo)
+			}
+		}
 
 		// Log event
 		if c.config.Verbose {
@@ -620,6 +743,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 				"timestamp", event.Timestamp.Format("15:04:05"),
 				"type", event.Type,
 				"url", event.URL,
+				"commit_sha", event.CommitSHA,
 				"delivery_id", event.DeliveryID,
 				"raw", event.Raw)
 		} else {
@@ -629,6 +753,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 					"event_number", eventNum,
 					"type", event.Type,
 					"url", event.URL,
+					"commit_sha", event.CommitSHA,
 					"delivery_id", event.DeliveryID)
 			} else {
 				c.logger.Info("Event received",

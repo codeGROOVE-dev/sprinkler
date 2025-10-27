@@ -32,13 +32,10 @@ const (
 	minMaskHeaderLength = 20  // Minimum header length before we show full "[REDACTED]"
 )
 
-// getEnvOrDefault returns the value of the environment variable or the default if not set.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
+// contextKey is a custom type for context keys to avoid collisions.
+type contextKey string
+
+const reservationTokenKey contextKey = "reservation_token"
 
 var (
 	webhookSecret = flag.String("webhook-secret", os.Getenv("GITHUB_WEBHOOK_SECRET"), "GitHub webhook secret for signature verification")
@@ -50,8 +47,12 @@ var (
 	maxConnsPerIP = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
 	maxConnsTotal = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
 	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
-	allowedEvents = flag.String("allowed-events", getEnvOrDefault("ALLOWED_WEBHOOK_EVENTS", "*"),
-		"Comma-separated list of allowed webhook event types (use '*' for all, default: '*')")
+	allowedEvents = flag.String("allowed-events", func() string {
+		if value := os.Getenv("ALLOWED_WEBHOOK_EVENTS"); value != "" {
+			return value
+		}
+		return "*"
+	}(), "Comma-separated list of allowed webhook event types (use '*' for all, default: '*')")
 	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
 )
 
@@ -244,7 +245,7 @@ func main() {
 		}
 
 		// Set reservation token in request context so websocket handler can commit it
-		r = r.WithContext(context.WithValue(r.Context(), "reservation_token", reservationToken))
+		r = r.WithContext(context.WithValue(r.Context(), reservationTokenKey, reservationToken))
 
 		// Log successful auth and proceed to upgrade
 		log.Printf("WebSocket UPGRADE: ip=%s duration=%v", ip, time.Since(startTime))

@@ -150,14 +150,6 @@ func (h *WebSocketHandler) extractGitHubToken(ws *websocket.Conn, ip string) (st
 	return githubToken, true
 }
 
-// tokenDebugInfo extracts token prefix for debug logging.
-func tokenDebugInfo(token string) string {
-	if len(token) >= tokenPrefixLength {
-		return token[:tokenPrefixLength]
-	}
-	return ""
-}
-
 // errorInfo holds error response details.
 type errorInfo struct {
 	code    string
@@ -281,7 +273,10 @@ func (*WebSocketHandler) handleAuthError(
 	logContext string,
 ) error {
 	errInfo := determineErrorInfo(err, username, orgName, userOrgs)
-	tokenPrefix := tokenDebugInfo(githubToken)
+	tokenPrefix := ""
+	if len(githubToken) >= tokenPrefixLength {
+		tokenPrefix = githubToken[:tokenPrefixLength]
+	}
 
 	logger.Error(logContext, err, logger.Fields{
 		"ip":           ip,
@@ -411,11 +406,6 @@ type wsCloser struct {
 	mu        sync.Mutex
 }
 
-// newWSCloser creates a new WebSocket closer wrapper.
-func newWSCloser(ws *websocket.Conn) *wsCloser {
-	return &wsCloser{ws: ws}
-}
-
 // Close closes the WebSocket connection exactly once.
 func (wc *wsCloser) Close() error {
 	var err error
@@ -491,7 +481,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	log.Printf("WebSocket Handle() got IP: %s", ip)
 
 	// Wrap WebSocket with sync.Once closer to prevent double-close
-	wc := newWSCloser(ws)
+	wc := &wsCloser{ws: ws}
 
 	// Ensure WebSocket is properly closed (client will be set later if connection succeeds)
 	var client *Client
@@ -508,7 +498,8 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	})
 
 	// Get reservation token from context (set by main.go before upgrade)
-	reservationToken, _ := ws.Request().Context().Value("reservation_token").(string)
+	// Context key is a string type for package boundary crossing
+	reservationToken, _ := ws.Request().Context().Value("reservation_token").(string) //nolint:errcheck // Type assertion intentionally unchecked - empty string is valid default
 	if reservationToken == "" {
 		// No reservation token - this should not happen in production
 		// (main.go always sets it), but handle gracefully for tests

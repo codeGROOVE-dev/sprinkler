@@ -463,3 +463,94 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (usernam
 	log.Printf("GitHub API: User is member of %d organizations: %v", len(orgNames), orgNames)
 	return username, orgNames, errors.New("user is not a member of the requested organization")
 }
+
+// FindPRsForCommit finds all pull requests associated with a specific commit SHA.
+// This is useful for resolving check_run/check_suite events when GitHub's pull_requests array is empty.
+// Returns a list of PR numbers that contain this commit.
+func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA string) ([]int, error) {
+	var prNumbers []int
+	var lastErr error
+
+	// Use GitHub's API to list PRs associated with a commit
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/pulls", owner, repo, commitSHA)
+
+	err := retry.Do(
+		func() error {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+			if err != nil {
+				return fmt.Errorf("failed to create request: %w", err)
+			}
+
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+			req.Header.Set("Accept", "application/vnd.github.v3+json")
+			req.Header.Set("User-Agent", "webhook-sprinkler/1.0")
+
+			resp, err := c.httpClient.Do(req)
+			if err != nil {
+				lastErr = fmt.Errorf("failed to make request: %w", err)
+				log.Printf("GitHub API request failed (will retry): %v", err)
+				return err // Retry on network errors
+			}
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					log.Printf("failed to close response body: %v", err)
+				}
+			}()
+
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+			if err != nil {
+				lastErr = fmt.Errorf("failed to read response: %w", err)
+				return err // Retry on read errors
+			}
+
+			// Handle status codes
+			switch resp.StatusCode {
+			case http.StatusOK:
+				// Success - parse response
+				var prs []struct {
+					Number int `json:"number"`
+				}
+				if err := json.Unmarshal(body, &prs); err != nil {
+					return retry.Unrecoverable(fmt.Errorf("failed to parse PR list response: %w", err))
+				}
+
+				prNumbers = make([]int, len(prs))
+				for i, pr := range prs {
+					prNumbers[i] = pr.Number
+				}
+				return nil
+
+			case http.StatusNotFound:
+				// Commit not found - could be a commit to main or repo doesn't exist
+				return retry.Unrecoverable(fmt.Errorf("commit not found: %s", commitSHA))
+
+			case http.StatusUnauthorized, http.StatusForbidden:
+				// Don't retry on auth errors
+				return retry.Unrecoverable(fmt.Errorf("authentication failed: status %d", resp.StatusCode))
+
+			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+				// Retry on server errors
+				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
+				log.Printf("GitHub API: /commits/%s/pulls server error %d (will retry)", commitSHA, resp.StatusCode)
+				return lastErr
+
+			default:
+				// Don't retry on other errors
+				return retry.Unrecoverable(fmt.Errorf("unexpected status: %d, body: %s", resp.StatusCode, string(body)))
+			}
+		},
+		retry.Attempts(3),
+		retry.DelayType(retry.FullJitterBackoffDelay),
+		retry.MaxDelay(2*time.Minute),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, err
+	}
+
+	log.Printf("GitHub API: Found %d PR(s) for commit %s in %s/%s", len(prNumbers), commitSHA, owner, repo)
+	return prNumbers, nil
+}

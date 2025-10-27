@@ -114,9 +114,9 @@ func TestConnectionLimiterTOCTOU_Documentation(t *testing.T) {
 	ip := "192.168.1.1"
 
 	var wg sync.WaitGroup
-	var canAddSuccess int32  // How many times CanAdd returned true
-	var addSuccess int32     // How many times Add actually succeeded
-	var addFailed int32      // How many times Add failed despite CanAdd=true
+	var canAddSuccess int32 // How many times CanAdd returned true
+	var addSuccess int32    // How many times Add actually succeeded
+	var addFailed int32     // How many times Add failed despite CanAdd=true
 
 	// Launch many goroutines simultaneously trying to add connections
 	// This simulates multiple HTTP handlers racing to add connections
