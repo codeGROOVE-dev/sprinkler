@@ -14,10 +14,11 @@ import (
 // Event represents a GitHub webhook event that will be broadcast to clients.
 // It contains the PR URL, timestamp, event type, and delivery ID from GitHub.
 type Event struct {
-	URL        string    `json:"url"`                   // Pull request URL
-	Timestamp  time.Time `json:"timestamp"`             // When the event occurred
-	Type       string    `json:"type"`                  // GitHub event type (e.g., "pull_request")
-	DeliveryID string    `json:"delivery_id,omitempty"` // GitHub webhook delivery ID (unique per webhook)
+	URL        string    `json:"url"`                    // Pull request URL (or repo URL for check events with race condition)
+	Timestamp  time.Time `json:"timestamp"`              // When the event occurred
+	Type       string    `json:"type"`                   // GitHub event type (e.g., "pull_request")
+	DeliveryID string    `json:"delivery_id,omitempty"`  // GitHub webhook delivery ID (unique per webhook)
+	CommitSHA  string    `json:"commit_sha,omitempty"`   // Commit SHA for check events (used to look up PR when URL is repo-only)
 }
 
 // Hub manages WebSocket clients and event broadcasting.

@@ -224,6 +224,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DeliveryID: deliveryID,
 	}
 
+	// For check events, include commit SHA to allow PR lookup when URL is repo-only (race condition)
+	if eventType == "check_run" || eventType == "check_suite" {
+		event.CommitSHA = extractCommitSHA(eventType, payload)
+	}
+
 	// Get client count before broadcasting (for debugging delivery issues)
 	clientCount := h.hub.ClientCount()
 
