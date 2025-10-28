@@ -113,13 +113,7 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
-				// Log token prefix for debugging (first 4 chars only)
-				tokenPrefix := ""
-				if len(c.token) >= 4 {
-					tokenPrefix = c.token[:4]
-				}
-				log.Printf("GitHub API: 403 Forbidden - access denied for /user endpoint "+
-					"(token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
+				log.Print("GitHub API: 403 Forbidden - access denied for /user endpoint")
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
@@ -285,8 +279,7 @@ func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []strin
 		tokenType = "unknown"
 	}
 
-	log.Printf("GitHub API: Starting authentication (token_type=%s, token_prefix=%s)",
-		tokenType, c.token[:min(4, len(c.token))])
+	log.Printf("GitHub API: Starting authentication (token_type=%s)", tokenType)
 
 	// First, try to detect if this is a GitHub App token by checking for /installation/repositories endpoint
 	// Try for all tokens, not just ghs_ prefix - let the API tell us what it is
@@ -391,13 +384,7 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
-				// Log token prefix for debugging (first 4 chars only)
-				tokenPrefix := ""
-				if len(c.token) >= 4 {
-					tokenPrefix = c.token[:4]
-				}
-				log.Printf("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint "+
-					"(token_prefix=%s, token_length=%d)", tokenPrefix, len(c.token))
+				log.Print("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint")
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:

@@ -228,9 +228,8 @@ func TestDebugLogger(t *testing.T) {
 	output := buf.String()
 	// Debug level is below INFO by default, so it won't appear in output
 	// But the function should not panic
-	if output == "" {
-		// Expected: debug messages are filtered out by default
-	}
+	// Expected: debug messages are filtered out by default (output should be empty)
+	_ = output
 }
 
 // TestLogAtFunction tests the LogAt function for custom source location
@@ -279,7 +278,7 @@ func TestInfoWithNilContext(t *testing.T) {
 	SetLogger(logger)
 
 	// Should not panic with nil context
-	Info(nil, "test message", Fields{"key": "value"})
+	Info(context.TODO(), "test message", Fields{"key": "value"})
 
 	output := buf.String()
 	if !strings.Contains(output, `msg="test message"`) {
@@ -297,7 +296,7 @@ func TestWarnWithNilContext(t *testing.T) {
 	SetLogger(logger)
 
 	// Should not panic with nil context
-	Warn(nil, "warning message", Fields{"warning": "type"})
+	Warn(context.TODO(), "warning message", Fields{"warning": "type"})
 
 	output := buf.String()
 	if !strings.Contains(output, "level=WARN") {
@@ -316,7 +315,7 @@ func TestErrorWithNilContext(t *testing.T) {
 
 	err := errors.New("test error")
 	// Should not panic with nil context
-	Error(nil, "error occurred", err, Fields{"code": "500"})
+	Error(context.TODO(), "error occurred", err, Fields{"code": "500"})
 
 	output := buf.String()
 	if !strings.Contains(output, "level=ERROR") {
@@ -356,7 +355,7 @@ func TestDebugWithNilContext(t *testing.T) {
 	SetLogger(logger)
 
 	// Should not panic with nil context
-	Debug(nil, "debug message", Fields{"debug": "info"})
+	Debug(context.TODO(), "debug message", Fields{"debug": "info"})
 
 	// Debug level is filtered out by default, but function should not panic
 	output := buf.String()

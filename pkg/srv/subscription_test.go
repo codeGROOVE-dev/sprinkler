@@ -614,6 +614,52 @@ func TestValidateSubscription(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "empty event type in list",
+			sub: Subscription{
+				Organization: "myorg",
+				EventTypes:   []string{"pull_request", ""},
+			},
+			wantErr: true,
+		},
+		{
+			name: "event type too long",
+			sub: Subscription{
+				Organization: "myorg",
+				EventTypes:   []string{strings.Repeat("a", 101)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "PR URL with invalid structure - no owner",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com//repo/pull/123",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "PR URL with invalid structure - no repo",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/owner//pull/123",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "PR URL with invalid PR number",
+			sub: Subscription{
+				Organization: "myorg",
+				PullRequests: []string{
+					"https://github.com/owner/repo/pull/",
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -623,5 +669,295 @@ func TestValidateSubscription(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestParsePRUrlEdgeCases tests edge cases in PR URL parsing.
+func TestParsePRUrlEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		prURL   string
+		wantErr bool
+	}{
+		{
+			name:    "invalid repo name with special chars",
+			prURL:   "https://github.com/owner/repo@test/pull/123",
+			wantErr: true,
+		},
+		{
+			name:    "valid repo with underscores",
+			prURL:   "https://github.com/owner/repo_test/pull/123",
+			wantErr: false,
+		},
+		{
+			name:    "valid repo with dots",
+			prURL:   "https://github.com/owner/repo.test/pull/123",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parsePRUrl(tt.prURL)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parsePRUrl() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestMatchesUserEventsOnlyEdgeCases tests edge cases in UserEventsOnly matching.
+func TestMatchesUserEventsOnlyEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		sub      Subscription
+		event    Event
+		payload  map[string]any
+		userOrgs map[string]bool
+		want     bool
+	}{
+		{
+			name: "UserEventsOnly with wildcard org - user not a member",
+			sub: Subscription{
+				Organization:   "*",
+				UserEventsOnly: true,
+				Username:       "alice",
+			},
+			event: Event{Type: "pull_request", URL: "https://github.com/otherorg/repo/pull/1"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"user": map[string]any{
+						"login": "alice",
+					},
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true},
+			want:     false,
+		},
+		{
+			name: "UserEventsOnly with no org - user not a member",
+			sub: Subscription{
+				UserEventsOnly: true,
+				Username:       "alice",
+			},
+			event: Event{Type: "pull_request", URL: "https://github.com/otherorg/repo/pull/1"},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "otherorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"user": map[string]any{
+						"login": "alice",
+					},
+				},
+			},
+			userOrgs: map[string]bool{"myorg": true},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matches(tt.sub, tt.event, tt.payload, tt.userOrgs)
+			if got != tt.want {
+				t.Errorf("matches() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMatchesPRSubscriptionEdgeCases tests edge cases in PR subscription matching.
+func TestMatchesPRSubscriptionEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		sub      Subscription
+		payload  map[string]any
+		eventOrg string
+		userOrgs map[string]bool
+		want     bool
+	}{
+		{
+			name: "no pull_request field in payload",
+			sub: Subscription{
+				PullRequests: []string{"https://github.com/myorg/repo/pull/123"},
+			},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+			},
+			eventOrg: "myorg",
+			userOrgs: map[string]bool{"myorg": true},
+			want:     false,
+		},
+		{
+			name: "PR subscription with invalid PR URL",
+			sub: Subscription{
+				PullRequests: []string{
+					"https://github.com/myorg/repo/pull/123",
+					"invalid-url",
+				},
+			},
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+				"pull_request": map[string]any{
+					"html_url": "https://github.com/myorg/repo/pull/456",
+					"number":   456.0,
+				},
+			},
+			eventOrg: "myorg",
+			userOrgs: map[string]bool{"myorg": true},
+			want:     false, // Doesn't match because PR number is different
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesPRSubscription(tt.sub, tt.payload, tt.eventOrg, tt.userOrgs)
+			if got != tt.want {
+				t.Errorf("matchesPRSubscription() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckCommentMentionEdgeCases tests edge cases in comment mention checking.
+func TestCheckCommentMentionEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		username string
+		want     bool
+	}{
+		{
+			name:     "no mention in body",
+			body:     "This is a comment without any mentions",
+			username: "alice",
+			want:     false,
+		},
+		{
+			name:     "mention at end of string",
+			body:     "Hello @alice",
+			username: "alice",
+			want:     true,
+		},
+		{
+			name:     "mention followed by punctuation",
+			body:     "Hello @alice!",
+			username: "alice",
+			want:     true,
+		},
+		{
+			name:     "mention as part of longer username",
+			body:     "Hello @alice123",
+			username: "alice",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkCommentMention(tt.body, tt.username)
+			if got != tt.want {
+				t.Errorf("checkCommentMention() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractEventOrg tests extracting organization from different payload structures.
+func TestExtractEventOrg(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name: "org from repository owner",
+			payload: map[string]any{
+				"repository": map[string]any{
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+				},
+			},
+			want: "myorg",
+		},
+		{
+			name: "org from organization field",
+			payload: map[string]any{
+				"organization": map[string]any{
+					"login": "myorg",
+				},
+			},
+			want: "myorg",
+		},
+		{
+			name:    "no org in payload",
+			payload: map[string]any{},
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractEventOrg(tt.payload)
+			if got != tt.want {
+				t.Errorf("extractEventOrg() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMatchesUserEventsOnlyWithSpecificOrg tests UserEventsOnly with specific org.
+func TestMatchesUserEventsOnlyWithSpecificOrg(t *testing.T) {
+	sub := Subscription{
+		Organization:   "myorg",
+		UserEventsOnly: true,
+		Username:       "alice",
+	}
+
+	// Event in different org - should not match
+	event := Event{Type: "pull_request", URL: "https://github.com/otherorg/repo/pull/1"}
+	payload := map[string]any{
+		"repository": map[string]any{
+			"owner": map[string]any{
+				"login": "otherorg",
+			},
+		},
+		"pull_request": map[string]any{
+			"user": map[string]any{
+				"login": "alice",
+			},
+		},
+	}
+
+	got := matches(sub, event, payload, nil)
+	if got {
+		t.Error("Should not match event in different org")
+	}
+
+	// Event in correct org - should match
+	payload["repository"] = map[string]any{
+		"owner": map[string]any{
+			"login": "myorg",
+		},
+	}
+	got = matches(sub, event, payload, nil)
+	if !got {
+		t.Error("Should match event in correct org")
 	}
 }

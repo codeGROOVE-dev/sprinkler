@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -33,7 +34,7 @@ func TestStopMultipleCalls(t *testing.T) {
 
 	go func() {
 		// Expected to fail to connect, but that's ok for this test
-		_ = client.Start(ctx) //nolint:errcheck // Error is expected in tests - client can't connect to non-existent server
+		_ = client.Start(ctx)
 	}()
 
 	// Give it a moment to initialize
@@ -197,14 +198,15 @@ func TestCommitPRCachePopulation(t *testing.T) {
 
 // mockWebSocketServer creates a test WebSocket server with configurable behavior.
 type mockWebSocketServer struct {
-	server         *httptest.Server
-	url            string
-	onConnection   func(*websocket.Conn)
-	acceptAuth     bool
-	sendEvents     []map[string]any
-	sendPings      bool
-	closeDelay     time.Duration
-	rejectWithCode int
+	server       *httptest.Server
+	url          string
+	onConnection func(*websocket.Conn)
+	acceptAuth   bool
+	sendEvents   []map[string]any
+	// Reserved for future use
+	_ bool          // sendPings
+	_ time.Duration // closeDelay
+	_ int           // rejectWithCode
 }
 
 func newMockServer(t *testing.T, acceptAuth bool) *mockWebSocketServer {
@@ -248,7 +250,7 @@ func newMockServer(t *testing.T, acceptAuth bool) *mockWebSocketServer {
 		for {
 			var msg map[string]any
 			if err := websocket.JSON.Receive(ws, &msg); err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					return
 				}
 				t.Logf("Read error: %v", err)
@@ -394,7 +396,7 @@ func TestClientPingPong(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for at least 2 pings
@@ -443,7 +445,7 @@ func TestClientReconnection(t *testing.T) {
 
 		// First connection: close immediately to trigger reconnection
 		if count == 1 {
-			ws.Close()
+			_ = ws.Close()
 			return
 		}
 
@@ -470,7 +472,7 @@ func TestClientReconnection(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for reconnection
@@ -555,7 +557,7 @@ func TestClientServerPings(t *testing.T) {
 
 		// Send pings to client
 		go func() {
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				ping := map[string]any{"type": "ping", "seq": i}
 				if err := websocket.JSON.Send(ws, ping); err != nil {
 					return
@@ -591,7 +593,7 @@ func TestClientServerPings(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for pongs
@@ -645,7 +647,7 @@ func TestClientEventWithCommitSHA(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -704,7 +706,7 @@ func TestClientWriteChannelBlocking(t *testing.T) {
 
 	err = client.Start(ctx)
 	// Should timeout gracefully, not deadlock
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Logf("Expected deadline exceeded, got: %v", err)
 	}
 
@@ -740,7 +742,7 @@ func TestClientCachePopulationFromPullRequestEvent(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event processing
@@ -820,7 +822,7 @@ func TestClientInvalidJSON(t *testing.T) {
 		// Send invalid JSON
 		_, _ = ws.Write([]byte("{invalid json}"))
 		time.Sleep(100 * time.Millisecond)
-		ws.Close()
+		_ = ws.Close()
 	}))
 	defer srv.Close()
 
@@ -867,7 +869,7 @@ func TestClientConnectionClosed(t *testing.T) {
 		}
 
 		// Close connection immediately
-		ws.Close()
+		_ = ws.Close()
 	}
 
 	client, err := New(Config{
@@ -905,7 +907,7 @@ func TestClientMaxRetries(t *testing.T) {
 		mu.Unlock()
 
 		// Always reject
-		ws.Close()
+		_ = ws.Close()
 	}
 
 	client, err := New(Config{
@@ -941,7 +943,7 @@ func TestClientStopWhileConnecting(t *testing.T) {
 	// Create a server that delays accepting connections
 	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		time.Sleep(5 * time.Second)
-		ws.Close()
+		_ = ws.Close()
 	}))
 	defer srv.Close()
 
@@ -959,7 +961,7 @@ func TestClientStopWhileConnecting(t *testing.T) {
 
 	ctx := context.Background()
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to be stopped
+		_ = client.Start(ctx)
 	}()
 
 	// Give it time to start connecting
@@ -1007,7 +1009,7 @@ func TestClientEventWithoutCommitSHA(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -1057,7 +1059,7 @@ func TestClientNoOnEvent(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Should not panic, just drop events
@@ -1127,7 +1129,7 @@ func TestClientUnknownMessageType(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Should handle unknown message gracefully
@@ -1233,7 +1235,7 @@ func TestClientMultiplePRsForCommit(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for events to be processed
@@ -1297,7 +1299,7 @@ func TestClientCheckEventExpansion(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for events to be processed
@@ -1357,7 +1359,7 @@ func TestClientInvalidTimestamp(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -1416,7 +1418,7 @@ func TestClientInvalidPRURL(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for events to be processed
@@ -1511,7 +1513,7 @@ func TestClientPRNumberParsingError(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event processing
@@ -1564,7 +1566,7 @@ func TestClientCheckEventWithoutCommitSHA(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1616,7 +1618,7 @@ func TestClientCheckEventWithPRURL(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1674,7 +1676,7 @@ func TestClientInvalidCheckEventURL(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1718,7 +1720,7 @@ func TestClientTokenProvider(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1800,7 +1802,7 @@ func TestClientUserEventsOnly(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1852,7 +1854,7 @@ func TestClientNoPRsForCommit(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1898,7 +1900,7 @@ func TestClientEmptyCacheLookup(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -1962,7 +1964,7 @@ func TestClientEventWithDeliveryID(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -2008,7 +2010,7 @@ func TestClientZeroPRNumber(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -2100,7 +2102,7 @@ func TestClientEventWithoutType(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -2152,7 +2154,7 @@ func TestClientEventWithoutURL(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -2204,7 +2206,7 @@ func TestClientCheckSuiteType(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event
@@ -2256,7 +2258,7 @@ func TestClientEventWithoutTimestamp(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+		_ = client.Start(ctx)
 	}()
 
 	// Wait for event

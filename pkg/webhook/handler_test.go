@@ -133,7 +133,10 @@ func TestWebhookHandlerEventFiltering(t *testing.T) {
 		},
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request") //nolint:canonicalheader // GitHub webhook header
 
@@ -202,7 +205,10 @@ func TestWebhookHandlerMissingSignature(t *testing.T) {
 	handler := NewHandler(h, secret, nil)
 
 	payload := map[string]any{"action": "opened"}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request") //nolint:canonicalheader // GitHub webhook header
@@ -272,7 +278,10 @@ func TestWebhookHandlerCheckRunWithCommit(t *testing.T) {
 		},
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "check_run") //nolint:canonicalheader // GitHub webhook header
 
@@ -434,7 +443,10 @@ func TestWebhookHandlerNoPRURL(t *testing.T) {
 		"ref":    "refs/heads/main",
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "push") //nolint:canonicalheader // GitHub webhook header
 
@@ -475,7 +487,10 @@ func TestWebhookHandlerCheckEventWithEmptyPRArray(t *testing.T) {
 		},
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "check_run") //nolint:canonicalheader // GitHub webhook header
 

@@ -40,6 +40,10 @@ const (
 
 	// Write channel buffer size.
 	writeChannelBuffer = 10
+
+	// Cache size limits to prevent memory exhaustion attacks.
+	defaultMaxCacheSize = 512  // Soft limit - evict 25% when exceeded
+	hardMaxCacheSize    = 1000 // Hard limit - aggressive eviction (50%)
 )
 
 // Event represents a webhook event received from the server.
@@ -136,8 +140,8 @@ func New(config Config) (*Client, error) {
 		logger:              logger,
 		commitPRCache:       make(map[string][]int),
 		commitPRCacheExpiry: make(map[string]time.Time),
-		commitCacheKeys:     make([]string, 0, 512),
-		maxCacheSize:        512,
+		commitCacheKeys:     make([]string, 0, defaultMaxCacheSize),
+		maxCacheSize:        defaultMaxCacheSize,
 		emptyResultTTL:      30 * time.Second, // Retry empty results after 30s
 	}, nil
 }
@@ -262,7 +266,7 @@ func (c *Client) Stop() {
 
 // connect establishes a WebSocket connection and handles events.
 //
-//nolint:gocognit,funlen,maintidx // Connection lifecycle orchestration is inherently complex
+//nolint:funlen,maintidx // Connection lifecycle orchestration is inherently complex
 func (c *Client) connect(ctx context.Context) error {
 	c.logger.Info("Establishing WebSocket connection")
 
@@ -294,26 +298,7 @@ func (c *Client) connect(ctx context.Context) error {
 	// Dial the server
 	ws, err := websocket.DialConfig(wsConfig)
 	if err != nil {
-		// Check for HTTP status codes in the error message
-		errStr := err.Error()
-		if strings.Contains(errStr, "bad status") {
-			errLower := strings.ToLower(errStr)
-			// Extract status code if present
-			if strings.Contains(errStr, "403") || strings.Contains(errLower, "forbidden") {
-				return &AuthenticationError{
-					message: fmt.Sprintf(
-						"Authentication failed (403 Forbidden): Check your GitHub token and organization membership. Original error: %v",
-						err,
-					),
-				}
-			}
-			if strings.Contains(errStr, "401") || strings.Contains(errLower, "unauthorized") {
-				return &AuthenticationError{
-					message: fmt.Sprintf("Authentication failed (401 Unauthorized): Invalid or missing token. Original error: %v", err),
-				}
-			}
-		}
-		return fmt.Errorf("dial: %w", err)
+		return c.handleDialError(err)
 	}
 	c.logger.Info("========================================")
 	c.logger.Info(fmt.Sprintf("✅ WebSocket ESTABLISHED: %s (org: %s)", c.config.ServerURL, c.config.Organization))
@@ -498,6 +483,32 @@ func (c *Client) connect(ctx context.Context) error {
 	return writeErr
 }
 
+// handleDialError checks for HTTP status codes in dial errors and returns appropriate errors.
+func (*Client) handleDialError(err error) error {
+	// Check for HTTP status codes in the error message
+	s := err.Error()
+	if !strings.Contains(s, "bad status") {
+		return fmt.Errorf("dial: %w", err)
+	}
+
+	lower := strings.ToLower(s)
+	// Extract status code if present
+	if strings.Contains(s, "403") || strings.Contains(lower, "forbidden") {
+		return &AuthenticationError{
+			message: fmt.Sprintf(
+				"Authentication failed (403 Forbidden): Check your GitHub token and organization membership. Original error: %v",
+				err,
+			),
+		}
+	}
+	if strings.Contains(s, "401") || strings.Contains(lower, "unauthorized") {
+		return &AuthenticationError{
+			message: fmt.Sprintf("Authentication failed (401 Unauthorized): Invalid or missing token. Original error: %v", err),
+		}
+	}
+	return fmt.Errorf("dial: %w", err)
+}
+
 // writePump is the ONLY goroutine that writes to the websocket.
 // All writes must go through the writeCh channel to prevent concurrent writes.
 func (c *Client) writePump(ctx context.Context, ws *websocket.Conn) error {
@@ -675,6 +686,9 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 					// Check if cache entry exists
 					existing, exists := c.commitPRCache[key]
 					if !exists {
+						// Ensure cache has space before adding new entry
+						c.ensureCacheSpace()
+
 						// New cache entry
 						c.commitCacheKeys = append(c.commitCacheKeys, key)
 						c.commitPRCache[key] = []int{prNum}
@@ -683,15 +697,6 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 							"owner", owner,
 							"repo", repo,
 							"pr_number", prNum)
-
-						// Evict oldest 25% if cache is full
-						if len(c.commitCacheKeys) > c.maxCacheSize { //nolint:revive // Cache eviction logic intentionally nested
-							n := c.maxCacheSize / 4
-							for i := range n {
-								delete(c.commitPRCache, c.commitCacheKeys[i])
-							}
-							c.commitCacheKeys = c.commitCacheKeys[n:]
-						}
 					} else {
 						// Check if PR number already in list
 						found := false
@@ -766,15 +771,9 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 						// Cache the result (even if empty)
 						c.cacheMu.Lock()
 						if _, exists := c.commitPRCache[key]; !exists { //nolint:revive // Cache management requires nested check
+							// Ensure cache has space before adding new entry
+							c.ensureCacheSpace()
 							c.commitCacheKeys = append(c.commitCacheKeys, key)
-							// Evict oldest 25% if cache is full
-							if len(c.commitCacheKeys) > c.maxCacheSize {
-								n := c.maxCacheSize / 4
-								for i := range n {
-									delete(c.commitPRCache, c.commitCacheKeys[i])
-								}
-								c.commitCacheKeys = c.commitCacheKeys[n:]
-							}
 						}
 						// Store copy to prevent external modifications
 						cached := make([]int, len(prs))
@@ -846,4 +845,40 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 			c.config.OnEvent(event)
 		}
 	}
+}
+
+// ensureCacheSpace evicts old cache entries if needed to prevent unbounded growth.
+// Must be called with cacheMu locked.
+// Implements two-tier eviction:
+//   - Soft limit (defaultMaxCacheSize): evict 25% of entries
+//   - Hard limit (hardMaxCacheSize): aggressive eviction of 50% of entries
+func (c *Client) ensureCacheSpace() {
+	n := len(c.commitCacheKeys)
+
+	var evict int
+	switch {
+	case n >= hardMaxCacheSize:
+		// Hit hard limit - aggressive eviction (50%)
+		evict = hardMaxCacheSize / 2
+		c.logger.Warn("Cache hit hard limit, performing aggressive eviction",
+			"current_size", n,
+			"hard_limit", hardMaxCacheSize,
+			"evicting", evict)
+	case n >= c.maxCacheSize:
+		// Hit soft limit - normal eviction (25%)
+		evict = c.maxCacheSize / 4
+		c.logger.Debug("Cache hit soft limit, performing normal eviction",
+			"current_size", n,
+			"soft_limit", c.maxCacheSize,
+			"evicting", evict)
+	default:
+		return
+	}
+
+	// Evict oldest entries
+	for i := range evict {
+		delete(c.commitPRCache, c.commitCacheKeys[i])
+		delete(c.commitPRCacheExpiry, c.commitCacheKeys[i])
+	}
+	c.commitCacheKeys = c.commitCacheKeys[evict:]
 }

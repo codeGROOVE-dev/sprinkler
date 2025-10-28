@@ -43,13 +43,14 @@ type Event struct {
 //   - If client disconnects during iteration, send fails gracefully (channel full or closed)
 //   - Client.Close() is safe to call multiple times during this window
 type Hub struct {
-	clients    map[string]*Client
-	register   chan *Client
-	unregister chan string
-	broadcast  chan broadcastMsg
-	stop       chan struct{}
-	stopped    chan struct{}
-	mu         sync.RWMutex
+	clients               map[string]*Client
+	register              chan *Client
+	unregister            chan string
+	broadcast             chan broadcastMsg
+	stop                  chan struct{}
+	stopped               chan struct{}
+	mu                    sync.RWMutex
+	periodicCheckInterval time.Duration // For testing; 0 means use default (1 minute)
 }
 
 // broadcastMsg contains an event and the payload for matching.
@@ -87,8 +88,12 @@ func (h *Hub) Run(ctx context.Context) {
 	logger.Info(ctx, "HUB STARTED - Fresh hub with 0 clients", nil)
 	logger.Info(ctx, "========================================", nil)
 
-	// Periodic client count logging (every minute)
-	ticker := time.NewTicker(1 * time.Minute)
+	// Periodic client count logging (every minute by default)
+	checkInterval := h.periodicCheckInterval
+	if checkInterval == 0 {
+		checkInterval = 1 * time.Minute
+	}
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	for {
