@@ -468,14 +468,25 @@ func (c *Client) connect(ctx context.Context) error {
 	// Start ping sender (sends to write channel, not directly to websocket)
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
-	go c.sendPings(pingCtx)
+	pingDone := make(chan struct{})
+	go func() {
+		c.sendPings(pingCtx)
+		close(pingDone)
+	}()
 
 	// Read events - when this returns, cancel everything
 	readErr := c.readEvents(ctx, ws)
 
-	// Stop write pump and ping sender
-	cancelWrite()
+	// Stop ping sender first - this ensures no more writes will be queued
 	cancelPing()
+	<-pingDone // Wait for ping sender to fully exit
+
+	// Stop write pump
+	cancelWrite()
+
+	// Close write channel to signal writePump to exit cleanly
+	// Safe to close now because ping sender has exited and won't write anymore
+	close(c.writeCh)
 
 	// Wait for write pump to finish
 	writeErr := <-writeDone
