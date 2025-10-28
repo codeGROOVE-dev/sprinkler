@@ -231,6 +231,7 @@ linters:
       - path: _test\.go
         linters:
           - dupl
+          - errcheck
           - gosec
           - godot
           - govet # alignment

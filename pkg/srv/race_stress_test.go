@@ -46,7 +46,7 @@ func TestConcurrentClientDisconnect(t *testing.T) {
 
 			// Create client (we'll use nil for websocket since we're not actually writing)
 			client := NewClient(ctx,
-				testClientID(clientNum),
+				fmt.Sprintf("test-client-%d", clientNum),
 				sub,
 				nil, // WebSocket not needed for this test
 				hub,
@@ -188,7 +188,7 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 			EventTypes:   []string{"pull_request"},
 		}
 		client := NewClient(ctx,
-			testClientID(i),
+			fmt.Sprintf("test-client-%d", i),
 			sub,
 			nil,
 			hub,
@@ -211,7 +211,7 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 			event := Event{
 				URL:        "https://github.com/test/repo/pull/123",
 				Type:       "pull_request",
-				DeliveryID: testDeliveryID(i),
+				DeliveryID: fmt.Sprintf("test-delivery-%d", i),
 			}
 			payload := map[string]any{
 				"repository": map[string]any{
@@ -279,7 +279,7 @@ func TestRapidConnectDisconnect(t *testing.T) {
 			}
 
 			client := NewClient(ctx,
-				testClientID(cycle),
+				fmt.Sprintf("test-client-%d", cycle),
 				sub,
 				nil,
 				hub,
@@ -332,7 +332,7 @@ func TestHubShutdownWithActiveClients(t *testing.T) {
 			Username:     "testuser",
 		}
 		client := NewClient(ctx,
-			testClientID(i),
+			fmt.Sprintf("test-client-%d", i),
 			sub,
 			nil,
 			hub,
@@ -360,11 +360,3 @@ func TestHubShutdownWithActiveClients(t *testing.T) {
 }
 
 // Helper functions
-
-func testClientID(num int) string {
-	return fmt.Sprintf("test-client-%d", num)
-}
-
-func testDeliveryID(num int) string {
-	return fmt.Sprintf("test-delivery-%d", num)
-}

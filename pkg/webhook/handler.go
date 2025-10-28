@@ -268,21 +268,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // VerifySignature validates the GitHub webhook signature.
+// Uses constant-time operations to prevent timing attacks.
 func VerifySignature(payload []byte, signature, secret string) bool {
-	// Secret is required for security - no bypass allowed
-	if secret == "" {
-		return false
-	}
-
-	if !strings.HasPrefix(signature, "sha256=") {
-		return false
-	}
-
+	// Always compute HMAC first to maintain constant time
+	// This prevents timing attacks from distinguishing between:
+	// 1. Missing/empty secret
+	// 2. Wrong signature format
+	// 3. Invalid signature
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payload)
 	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 
-	return hmac.Equal([]byte(signature), []byte(expected))
+	// Perform all checks with constant-time comparison
+	validFormat := strings.HasPrefix(signature, "sha256=")
+	validSecret := secret != ""
+	validSignature := hmac.Equal([]byte(signature), []byte(expected))
+
+	return validFormat && validSecret && validSignature
 }
 
 // ExtractPRURL extracts the pull request URL from various event types.

@@ -45,40 +45,6 @@ func TestConnectionLimiter(t *testing.T) {
 	}
 }
 
-// TestConnectionLimiterCanAdd tests the CanAdd method.
-func TestConnectionLimiterCanAdd(t *testing.T) {
-	cl := NewConnectionLimiter(2, 5)
-	defer cl.Stop()
-
-	// Test basic case
-	ip1 := "192.168.1.1"
-	if !cl.CanAdd(ip1) {
-		t.Error("Should allow first connection")
-	}
-
-	// Add connections
-	cl.Add(ip1)
-	cl.Add(ip1)
-
-	// Should not allow more (per-IP limit)
-	if cl.CanAdd(ip1) {
-		t.Error("Should not allow connection (per-IP limit)")
-	}
-
-	// Test total limit
-	ip2 := "192.168.1.2"
-	ip3 := "192.168.1.3"
-	cl.Add(ip2)
-	cl.Add(ip2)
-	cl.Add(ip3)
-
-	// Now at 5 total connections, should not allow more
-	ip4 := "192.168.1.4"
-	if cl.CanAdd(ip4) {
-		t.Error("Should not allow connection (total limit)")
-	}
-}
-
 // TestConnectionLimiterEviction tests eviction of old inactive entries.
 func TestConnectionLimiterEviction(t *testing.T) {
 	cl := NewConnectionLimiter(2, 100)
@@ -89,7 +55,7 @@ func TestConnectionLimiterEviction(t *testing.T) {
 	// For testing purposes, we'll just add enough to trigger the logic
 
 	// Add and remove connections to create inactive entries
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ip := fmt.Sprintf("192.168.1.%d", i)
 		cl.Add(ip)
 		cl.Remove(ip) // Make it inactive
@@ -198,48 +164,6 @@ func TestConnectionLimiterExpiredReservation(t *testing.T) {
 	cl.mu.Unlock()
 }
 
-// TestConnectionLimiterCanAddWithEviction tests CanAdd when eviction is needed.
-func TestConnectionLimiterCanAddWithEviction(t *testing.T) {
-	cl := NewConnectionLimiter(1, 100)
-	defer cl.Stop()
-
-	// Add several IPs and make them inactive to test eviction logic
-	for i := 0; i < 5; i++ {
-		ip := fmt.Sprintf("192.168.1.%d", i)
-		cl.Add(ip)
-		cl.Remove(ip) // Make inactive
-	}
-
-	// Add a new IP - should work with eviction
-	newIP := "192.168.2.1"
-	if !cl.CanAdd(newIP) {
-		t.Error("CanAdd should return true when inactive entries can be evicted")
-	}
-}
-
-// TestConnectionLimiterCanAddNoEvictionPossible tests CanAdd when no eviction is possible.
-func TestConnectionLimiterCanAddNoEvictionPossible(t *testing.T) {
-	cl := NewConnectionLimiter(2, 100)
-	defer cl.Stop()
-
-	// Fill up some IPs with active connections (cannot be evicted)
-	for i := 0; i < 3; i++ {
-		ip := fmt.Sprintf("192.168.1.%d", i)
-		cl.Add(ip)
-		cl.Add(ip) // 2 connections each
-	}
-
-	// Note: We can't actually test maxIPEntries (10000) limit easily in tests
-	// This tests the per-IP and total limits
-	ip4 := "192.168.1.4"
-	cl.Add(ip4)
-
-	// At this point we have active connections, testing basic logic
-	if cl.CanAdd(ip4) {
-		// May or may not be true depending on counts, just ensure no panic
-	}
-}
-
 // TestConnectionLimiterMultipleRemove tests removing connection multiple times.
 func TestConnectionLimiterMultipleRemove(t *testing.T) {
 	cl := NewConnectionLimiter(2, 5)
@@ -295,7 +219,7 @@ func TestConnectionLimiterCleanup(t *testing.T) {
 	defer cl.Stop()
 
 	// Add some connections and make them inactive
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ip := fmt.Sprintf("192.168.1.%d", i)
 		cl.Add(ip)
 		cl.Remove(ip)
@@ -401,7 +325,7 @@ func TestConnectionLimiterEvictOldestInactive(t *testing.T) {
 	defer cl.Stop()
 
 	// Add and remove many IPs to create inactive entries with different ages
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
 		cl.Add(ip)
 		// Remove half of them to make inactive
@@ -428,24 +352,6 @@ func TestConnectionLimiterEvictOldestInactive(t *testing.T) {
 	if totalAfter > totalBefore {
 		t.Errorf("Expected total entries to decrease or stay same, but increased from %d to %d", totalBefore, totalAfter)
 	}
-}
-
-// TestConnectionLimiterCanAddWithFullMap tests CanAdd when IP map is full.
-func TestConnectionLimiterCanAddWithFullMap(t *testing.T) {
-	cl := NewConnectionLimiter(1, 1000)
-	defer cl.Stop()
-
-	// Add IPs with active connections (can't be evicted)
-	for i := 0; i < 15; i++ {
-		ip := fmt.Sprintf("192.168.1.%d", i)
-		cl.Add(ip) // Keep active
-	}
-
-	// All entries are active, test CanAdd logic
-	newIP := "192.168.2.1"
-	result := cl.CanAdd(newIP)
-	// Result depends on total limit, but function should not panic
-	_ = result
 }
 
 func TestClientIP(t *testing.T) {

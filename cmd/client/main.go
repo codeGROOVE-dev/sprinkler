@@ -19,42 +19,6 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
 
-// gitHubToken attempts to get a GitHub token from multiple sources:
-// 1. Command-line flag
-// 2. GITHUB_TOKEN environment variable
-// 3. gh auth token command.
-func gitHubToken(flagToken string) (string, error) {
-	// First try flag
-	if flagToken != "" {
-		return flagToken, nil
-	}
-
-	// Then try environment variable
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		log.Println("Using token from GITHUB_TOKEN environment variable")
-		return token, nil
-	}
-
-	// Finally try gh auth token
-	log.Println("No token provided, attempting to use gh auth token")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get token from 'gh auth token': %w\n"+
-			"Please provide a token via -token flag, GITHUB_TOKEN env var, or authenticate with 'gh auth login'", err)
-	}
-
-	token := strings.TrimSpace(string(output))
-	if token == "" {
-		return "", errors.New("gh auth token returned empty token")
-	}
-
-	log.Println("Using token from gh auth token")
-	return token, nil
-}
-
 func run() error {
 	var (
 		serverAddr  = flag.String("addr", client.DefaultServerAddress, "server address (hostname:port)")
@@ -98,10 +62,29 @@ func run() error {
 		return errors.New("organization, PR URLs, or --user flag required")
 	}
 
-	// Get token from various sources
-	githubToken, err := gitHubToken(*token)
-	if err != nil {
-		return err
+	// Get token from various sources: flag, environment variable, or gh CLI
+	var githubToken string
+	var err error
+	if *token != "" {
+		githubToken = *token
+	} else if envToken := os.Getenv("GITHUB_TOKEN"); envToken != "" {
+		log.Println("Using token from GITHUB_TOKEN environment variable")
+		githubToken = envToken
+	} else {
+		log.Println("No token provided, attempting to use gh auth token")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get token from 'gh auth token': %w\n"+
+				"Please provide a token via -token flag, GITHUB_TOKEN env var, or authenticate with 'gh auth login'", err)
+		}
+		githubToken = strings.TrimSpace(string(output))
+		if githubToken == "" {
+			return errors.New("gh auth token returned empty token")
+		}
+		log.Println("Using token from gh auth token")
 	}
 
 	// Build WebSocket URL - secure by default
