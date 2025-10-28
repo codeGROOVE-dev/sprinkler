@@ -229,8 +229,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DeliveryID: deliveryID,
 	}
 
-	// For check events, include commit SHA to allow PR lookup when URL is repo-only (race condition)
-	if eventType == "check_run" || eventType == "check_suite" {
+	// Extract commit SHA for cache population and PR lookup
+	// - pull_request: allows client-side cache population for commit->PR mapping
+	// - check events: enables PR lookup when URL is repo-only (GitHub race condition)
+	if eventType == "check_run" || eventType == "check_suite" || eventType == "pull_request" {
 		event.CommitSHA = extractCommitSHA(eventType, payload)
 	}
 
@@ -406,7 +408,7 @@ func getMapKeys(m map[string]any) []string {
 	return keys
 }
 
-// extractCommitSHA extracts the commit SHA from check_run or check_suite events.
+// extractCommitSHA extracts the commit SHA from pull_request, check_run, or check_suite events.
 func extractCommitSHA(eventType string, payload map[string]any) string {
 	switch eventType {
 	case "check_run":
@@ -421,8 +423,16 @@ func extractCommitSHA(eventType string, payload map[string]any) string {
 				return headSHA
 			}
 		}
+	case "pull_request":
+		if pr, ok := payload["pull_request"].(map[string]any); ok {
+			if head, ok := pr["head"].(map[string]any); ok {
+				if sha, ok := head["sha"].(string); ok {
+					return sha
+				}
+			}
+		}
 	default:
-		// Not a check event, no SHA to extract
+		// Not a supported event type for SHA extraction
 	}
 	return ""
 }
