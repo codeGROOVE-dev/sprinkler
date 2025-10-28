@@ -2,6 +2,7 @@ package srv
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -353,3 +354,130 @@ func TestNewWebSocketHandler(t *testing.T) {
 		}
 	})
 }
+
+// TestDetermineErrorInfo tests error type classification.
+func TestDetermineErrorInfo(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		username string
+		orgName  string
+		userOrgs []string
+		wantCode string
+		wantMsg  string
+	}{
+		{
+			name:     "invalid token",
+			err:      fmt.Errorf("invalid GitHub token"),
+			username: "user1",
+			orgName:  "org1",
+			wantCode: "authentication_failed",
+			wantMsg:  "Invalid GitHub token.",
+		},
+		{
+			name:     "access forbidden",
+			err:      fmt.Errorf("access forbidden"),
+			username: "user1",
+			orgName:  "org1",
+			wantCode: "access_denied",
+			wantMsg:  "Access forbidden. Check token permissions.",
+		},
+		{
+			name:     "rate limit",
+			err:      fmt.Errorf("rate limit exceeded"),
+			username: "user1",
+			orgName:  "org1",
+			wantCode: "rate_limit_exceeded",
+			wantMsg:  "GitHub API rate limit exceeded. Try again later.",
+		},
+		{
+			name:     "not a member with username",
+			err:      fmt.Errorf("not a member"),
+			username: "user1",
+			orgName:  "org1",
+			userOrgs: []string{"other-org"},
+			wantCode: "access_denied",
+			wantMsg:  "User 'user1' is not a member of organization 'org1'. Member of: other-org",
+		},
+		{
+			name:     "not a member without user orgs",
+			err:      fmt.Errorf("not a member"),
+			username: "user1",
+			orgName:  "org1",
+			userOrgs: nil,
+			wantCode: "access_denied",
+			wantMsg:  "User 'user1' is not a member of organization 'org1'.",
+		},
+		{
+			name:     "not a member without username",
+			err:      fmt.Errorf("not a member"),
+			username: "",
+			orgName:  "org1",
+			wantCode: "access_denied",
+			wantMsg:  "You are not a member of organization 'org1'.",
+		},
+		{
+			name:     "unknown error",
+			err:      fmt.Errorf("some other error"),
+			username: "user1",
+			orgName:  "org1",
+			wantCode: "access_denied",
+			wantMsg:  "Access denied.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := determineErrorInfo(tt.err, tt.username, tt.orgName, tt.userOrgs)
+			if info.code != tt.wantCode {
+				t.Errorf("code = %q, want %q", info.code, tt.wantCode)
+			}
+			if info.message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", info.message, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// TestSendErrorResponse tests sending error responses to clients.
+func TestSendErrorResponse(t *testing.T) {
+	// Create a test WebSocket server
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		ctx := context.Background()
+		errInfo := errorInfo{
+			code:    "test_error",
+			message: "Test error message",
+			reason:  "test_reason",
+		}
+
+		err := sendErrorResponse(ctx, ws, errInfo, "127.0.0.1")
+		if err != nil {
+			t.Errorf("sendErrorResponse failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer ws.Close()
+
+	// Receive error response
+	var response map[string]string
+	if err := websocket.JSON.Receive(ws, &response); err != nil {
+		t.Fatalf("Failed to receive error response: %v", err)
+	}
+
+	if response["type"] != "error" {
+		t.Errorf("Expected type='error', got %v", response)
+	}
+	if response["error"] != "test_error" {
+		t.Errorf("Expected error='test_error', got %v", response)
+	}
+	if response["message"] != "Test error message" {
+		t.Errorf("Expected message='Test error message', got %v", response)
+	}
+}
+
