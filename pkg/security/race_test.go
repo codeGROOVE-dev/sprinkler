@@ -213,33 +213,6 @@ func TestConnectionLimiterConcurrentAccess(t *testing.T) {
 	}
 }
 
-// TestRateLimiterConcurrentAccess verifies rate limiter thread safety.
-func TestRateLimiterConcurrentAccess(t *testing.T) {
-	limiter := NewRateLimiter(100)
-	defer limiter.Stop()
-
-	var wg sync.WaitGroup
-
-	// Test concurrent Allow from multiple IPs
-	for i := range 10 {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			ip := "192.168.1." + string(rune('1'+id))
-
-			// Rapid allow checks
-			for range 100 {
-				_ = limiter.Allow(ip)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// No assertions needed - if we didn't panic, we're good
-	t.Log("✓ Rate limiter handled concurrent access without panics")
-}
-
 // TestConnectionLimiterReservationCancellation tests the cancellation path.
 func TestConnectionLimiterReservationCancellation(t *testing.T) {
 	limiter := NewConnectionLimiter(10, 1000)

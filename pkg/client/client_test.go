@@ -2,9 +2,14 @@ package client
 
 import (
 	"context"
+	"io"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 // TestStopMultipleCalls verifies that calling Stop() multiple times is safe
@@ -187,4 +192,569 @@ func TestCommitPRCachePopulation(t *testing.T) {
 			t.Errorf("Cache size %d exceeds max %d", cacheSize, client.maxCacheSize)
 		}
 	})
+}
+
+// mockWebSocketServer creates a test WebSocket server with configurable behavior.
+type mockWebSocketServer struct {
+	server         *httptest.Server
+	url            string
+	onConnection   func(*websocket.Conn)
+	acceptAuth     bool
+	sendEvents     []map[string]any
+	sendPings      bool
+	closeDelay     time.Duration
+	rejectWithCode int
+}
+
+func newMockServer(t *testing.T, acceptAuth bool) *mockWebSocketServer {
+	t.Helper()
+	m := &mockWebSocketServer{
+		acceptAuth: acceptAuth,
+	}
+
+	handler := websocket.Handler(func(ws *websocket.Conn) {
+		if m.onConnection != nil {
+			m.onConnection(ws)
+			return
+		}
+
+		// Default behavior: read subscription, confirm, send events, handle pings
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			t.Logf("Failed to read subscription: %v", err)
+			return
+		}
+
+		// Send subscription confirmation
+		confirmation := map[string]any{
+			"type":         "subscription_confirmed",
+			"organization": sub["organization"],
+		}
+		if err := websocket.JSON.Send(ws, confirmation); err != nil {
+			t.Logf("Failed to send confirmation: %v", err)
+			return
+		}
+
+		// Send events if configured
+		for _, event := range m.sendEvents {
+			if err := websocket.JSON.Send(ws, event); err != nil {
+				t.Logf("Failed to send event: %v", err)
+				return
+			}
+		}
+
+		// Handle pings/pongs
+		for {
+			var msg map[string]any
+			if err := websocket.JSON.Receive(ws, &msg); err != nil {
+				if err == io.EOF {
+					return
+				}
+				t.Logf("Read error: %v", err)
+				return
+			}
+
+			if msgType, ok := msg["type"].(string); ok {
+				if msgType == "ping" {
+					pong := map[string]any{"type": "pong"}
+					if seq, ok := msg["seq"]; ok {
+						pong["seq"] = seq
+					}
+					if err := websocket.JSON.Send(ws, pong); err != nil {
+						return
+					}
+				}
+			}
+		}
+	})
+
+	m.server = httptest.NewServer(handler)
+	m.url = "ws" + strings.TrimPrefix(m.server.URL, "http")
+	return m
+}
+
+func (m *mockWebSocketServer) Close() {
+	m.server.Close()
+}
+
+// TestClientConnectAndReceiveEvents tests the full connection lifecycle.
+func TestClientConnectAndReceiveEvents(t *testing.T) {
+	// Create mock server that sends test events
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	srv.sendEvents = []map[string]any{
+		{
+			"type":      "pull_request",
+			"url":       "https://github.com/test/repo/pull/1",
+			"timestamp": time.Now().Format(time.RFC3339),
+		},
+		{
+			"type":      "check_run",
+			"url":       "https://github.com/test/repo/pull/1",
+			"timestamp": time.Now().Format(time.RFC3339),
+		},
+	}
+
+	// Create client
+	var receivedEvents []Event
+	var mu sync.Mutex
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		OnEvent: func(e Event) {
+			mu.Lock()
+			receivedEvents = append(receivedEvents, e)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	// Start client with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Start(ctx)
+	}()
+
+	// Wait a bit for events to be received
+	time.Sleep(500 * time.Millisecond)
+	client.Stop()
+
+	// Check received events
+	mu.Lock()
+	eventCount := len(receivedEvents)
+	mu.Unlock()
+
+	if eventCount != 2 {
+		t.Errorf("Expected 2 events, got %d", eventCount)
+	}
+}
+
+// TestClientPingPong tests that pings are sent and pongs are received.
+func TestClientPingPong(t *testing.T) {
+	pingReceived := make(chan bool, 10)
+
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	// Custom connection handler that tracks pings
+	srv.onConnection = func(ws *websocket.Conn) {
+		// Read subscription
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			return
+		}
+
+		// Send confirmation
+		confirmation := map[string]any{"type": "subscription_confirmed"}
+		if err := websocket.JSON.Send(ws, confirmation); err != nil {
+			return
+		}
+
+		// Listen for pings from client
+		for {
+			var msg map[string]any
+			if err := websocket.JSON.Receive(ws, &msg); err != nil {
+				return
+			}
+
+			if msgType, ok := msg["type"].(string); ok && msgType == "ping" {
+				pingReceived <- true
+
+				// Send pong response
+				pong := map[string]any{"type": "pong"}
+				if err := websocket.JSON.Send(ws, pong); err != nil {
+					return
+				}
+			}
+		}
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		PingInterval: 100 * time.Millisecond, // Fast pings for testing
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+	}()
+
+	// Wait for at least 2 pings
+	select {
+	case <-pingReceived:
+		// First ping received
+	case <-time.After(1 * time.Second):
+		t.Fatal("No ping received within 1 second")
+	}
+
+	select {
+	case <-pingReceived:
+		// Second ping received - success!
+	case <-time.After(1 * time.Second):
+		t.Fatal("Second ping not received within 1 second")
+	}
+
+	client.Stop()
+}
+
+// TestClientReconnection tests that the client reconnects on disconnect.
+func TestClientReconnection(t *testing.T) {
+	connectionCount := 0
+	var mu sync.Mutex
+
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	srv.onConnection = func(ws *websocket.Conn) {
+		mu.Lock()
+		connectionCount++
+		count := connectionCount
+		mu.Unlock()
+
+		// Read subscription
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			return
+		}
+
+		// Send confirmation
+		confirmation := map[string]any{"type": "subscription_confirmed"}
+		if err := websocket.JSON.Send(ws, confirmation); err != nil {
+			return
+		}
+
+		// First connection: close immediately to trigger reconnection
+		if count == 1 {
+			ws.Close()
+			return
+		}
+
+		// Second connection: stay alive
+		for {
+			var msg map[string]any
+			if err := websocket.JSON.Receive(ws, &msg); err != nil {
+				return
+			}
+		}
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		MaxBackoff:   100 * time.Millisecond, // Fast reconnection for testing
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+	}()
+
+	// Wait for reconnection
+	time.Sleep(1 * time.Second)
+
+	mu.Lock()
+	count := connectionCount
+	mu.Unlock()
+
+	if count < 2 {
+		t.Errorf("Expected at least 2 connections (reconnection), got %d", count)
+	}
+
+	client.Stop()
+}
+
+// TestClientAuthenticationError tests that auth errors don't trigger reconnection.
+func TestClientAuthenticationError(t *testing.T) {
+	srv := newMockServer(t, false)
+	defer srv.Close()
+
+	srv.onConnection = func(ws *websocket.Conn) {
+		// Read subscription
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			return
+		}
+
+		// Send auth error
+		errMsg := map[string]any{
+			"type":    "error",
+			"error":   "access_denied",
+			"message": "Not authorized",
+		}
+		if err := websocket.JSON.Send(ws, errMsg); err != nil {
+			return
+		}
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "bad-token",
+		Organization: "test-org",
+		MaxRetries:   3,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err = client.Start(ctx)
+	if err == nil {
+		t.Fatal("Expected authentication error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "Authentication") && !strings.Contains(err.Error(), "authorization") {
+		t.Errorf("Expected authentication error, got: %v", err)
+	}
+}
+
+// TestClientServerPings tests that the client responds to server pings.
+func TestClientServerPings(t *testing.T) {
+	pongReceived := make(chan bool, 10)
+
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	srv.onConnection = func(ws *websocket.Conn) {
+		// Read subscription
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			return
+		}
+
+		// Send confirmation
+		confirmation := map[string]any{"type": "subscription_confirmed"}
+		if err := websocket.JSON.Send(ws, confirmation); err != nil {
+			return
+		}
+
+		// Send pings to client
+		go func() {
+			for i := 0; i < 3; i++ {
+				ping := map[string]any{"type": "ping", "seq": i}
+				if err := websocket.JSON.Send(ws, ping); err != nil {
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+
+		// Listen for pongs
+		for {
+			var msg map[string]any
+			if err := websocket.JSON.Receive(ws, &msg); err != nil {
+				return
+			}
+
+			if msgType, ok := msg["type"].(string); ok && msgType == "pong" {
+				pongReceived <- true
+			}
+		}
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+	}()
+
+	// Wait for pongs
+	pongsReceived := 0
+	timeout := time.After(1 * time.Second)
+
+	for pongsReceived < 2 {
+		select {
+		case <-pongReceived:
+			pongsReceived++
+		case <-timeout:
+			t.Fatalf("Only received %d pongs, expected at least 2", pongsReceived)
+		}
+	}
+
+	client.Stop()
+}
+
+// TestClientEventWithCommitSHA tests event handling with commit SHA.
+func TestClientEventWithCommitSHA(t *testing.T) {
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	srv.sendEvents = []map[string]any{
+		{
+			"type":       "pull_request",
+			"url":        "https://github.com/test/repo/pull/123",
+			"commit_sha": "abc123",
+			"timestamp":  time.Now().Format(time.RFC3339),
+		},
+	}
+
+	var receivedEvent Event
+	eventReceived := make(chan bool, 1)
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		OnEvent: func(e Event) {
+			receivedEvent = e
+			eventReceived <- true
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+	}()
+
+	// Wait for event
+	select {
+	case <-eventReceived:
+		// Success
+	case <-time.After(1 * time.Second):
+		t.Fatal("Event not received")
+	}
+
+	if receivedEvent.CommitSHA != "abc123" {
+		t.Errorf("Expected commit SHA 'abc123', got %q", receivedEvent.CommitSHA)
+	}
+	if receivedEvent.Type != "pull_request" {
+		t.Errorf("Expected type 'pull_request', got %q", receivedEvent.Type)
+	}
+
+	client.Stop()
+}
+
+// TestClientWriteChannelBlocking tests that write channel doesn't block indefinitely.
+func TestClientWriteChannelBlocking(t *testing.T) {
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	srv.onConnection = func(ws *websocket.Conn) {
+		// Read subscription
+		var sub map[string]any
+		if err := websocket.JSON.Receive(ws, &sub); err != nil {
+			return
+		}
+
+		// Send confirmation
+		confirmation := map[string]any{"type": "subscription_confirmed"}
+		if err := websocket.JSON.Send(ws, confirmation); err != nil {
+			return
+		}
+
+		// Don't read anything else - this will cause write buffer to potentially fill
+		time.Sleep(5 * time.Second)
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		PingInterval: 10 * time.Millisecond, // Very fast pings to fill buffer
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	err = client.Start(ctx)
+	// Should timeout gracefully, not deadlock
+	if err != context.DeadlineExceeded {
+		t.Logf("Expected deadline exceeded, got: %v", err)
+	}
+
+	client.Stop()
+}
+
+// TestClientCachePopulationFromPullRequestEvent tests the cache population logic.
+func TestClientCachePopulationFromPullRequestEvent(t *testing.T) {
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	// Send a pull_request event with commit SHA
+	srv.sendEvents = []map[string]any{
+		{
+			"type":       "pull_request",
+			"url":        "https://github.com/owner/repo/pull/456",
+			"commit_sha": "def789",
+			"timestamp":  time.Now().Format(time.RFC3339),
+		},
+	}
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx) //nolint:errcheck // Expected to timeout
+	}()
+
+	// Wait for event processing
+	time.Sleep(500 * time.Millisecond)
+	client.Stop()
+
+	// Check that cache was populated
+	client.cacheMu.RLock()
+	cached, exists := client.commitPRCache["owner/repo:def789"]
+	client.cacheMu.RUnlock()
+
+	if !exists {
+		t.Error("Expected cache to be populated from pull_request event")
+	}
+	if len(cached) != 1 || cached[0] != 456 {
+		t.Errorf("Expected cached PR [456], got %v", cached)
+	}
 }

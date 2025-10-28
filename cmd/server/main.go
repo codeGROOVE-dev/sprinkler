@@ -46,7 +46,6 @@ var (
 	leEmail       = flag.String("le-email", "", "Contact email for Let's Encrypt notifications")
 	maxConnsPerIP = flag.Int("max-conns-per-ip", 10, "Maximum WebSocket connections per IP")
 	maxConnsTotal = flag.Int("max-conns-total", 1000, "Maximum total WebSocket connections")
-	rateLimit     = flag.Int("rate-limit", 100, "Maximum requests per minute per IP")
 	allowedEvents = flag.String("allowed-events", func() string {
 		if value := os.Getenv("ALLOWED_WEBHOOK_EVENTS"); value != "" {
 			return value
@@ -92,8 +91,7 @@ func main() {
 	hub := srv.NewHub()
 	go hub.Run(ctx)
 
-	// Create security components
-	rateLimiter := security.NewRateLimiter(*rateLimit)
+	// Create connection limiter for WebSocket connections
 	connLimiter := security.NewConnectionLimiter(*maxConnsPerIP, *maxConnsTotal)
 
 	mux := http.NewServeMux()
@@ -130,16 +128,6 @@ func main() {
 		// Exact path match only
 		if r.URL.Path != "/webhook" {
 			http.NotFound(w, r)
-			return
-		}
-
-		// Rate limiting
-		if !rateLimiter.Allow(ip) {
-			log.Printf("Webhook 429: rate limit exceeded ip=%s", ip)
-			w.WriteHeader(http.StatusTooManyRequests)
-			if _, err := w.Write([]byte("429 Too Many Requests: Rate limit exceeded\n")); err != nil {
-				log.Printf("failed to write 429 response: %v", err)
-			}
 			return
 		}
 
@@ -182,16 +170,6 @@ func main() {
 		if r.URL.Path != "/ws" {
 			log.Printf("WebSocket 404: wrong path=%s ip=%s", r.URL.Path, ip)
 			http.NotFound(w, r)
-			return
-		}
-
-		// Rate limiting check
-		if !rateLimiter.Allow(ip) {
-			log.Printf("WebSocket 429: rate limit exceeded ip=%s", ip)
-			w.WriteHeader(http.StatusTooManyRequests)
-			if _, err := w.Write([]byte("429 Too Many Requests: Rate limit exceeded\n")); err != nil {
-				log.Printf("failed to write 429 response: %v", err)
-			}
 			return
 		}
 
@@ -286,9 +264,6 @@ func main() {
 
 		// Stop accepting new connections
 		hub.Stop()
-
-		// Stop the rate limiter cleanup routine
-		rateLimiter.Stop()
 
 		// Stop the connection limiter cleanup routine
 		connLimiter.Stop()

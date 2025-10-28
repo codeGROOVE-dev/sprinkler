@@ -6,27 +6,6 @@ import (
 	"testing"
 )
 
-func TestRateLimiter(t *testing.T) {
-	rl := NewRateLimiter(5)
-
-	ip := "192.168.1.1"
-
-	// Should allow first 5 requests
-	for i := range 5 {
-		if !rl.Allow(ip) {
-			t.Errorf("request %d should be allowed", i+1)
-		}
-	}
-
-	// 6th request should be denied
-	if rl.Allow(ip) {
-		t.Error("6th request should be denied")
-	}
-
-	// Note: Our simplified rate limiter resets every minute,
-	// not every second, so we can't test the reset behavior easily
-}
-
 func TestConnectionLimiter(t *testing.T) {
 	cl := NewConnectionLimiter(2, 5)
 
