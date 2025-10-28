@@ -1,0 +1,103 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Build
+      run: make build
+
+    - name: Run tests with race detector and coverage
+      run: make test
+
+    - name: Generate detailed coverage report
+      run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Check coverage threshold (80% minimum for pkg/)
+      run: |
+        echo "Checking coverage for each package..."
+        for pkg in $(go list ./pkg/...); do
+          coverage=$(go test -coverprofile=/tmp/coverage.out $pkg 2>&1 | grep -oP 'coverage: \K[0-9.]+' || echo "0")
+          pkg_name=$(echo $pkg | sed 's/.*\///')
+          echo "$pkg_name: ${coverage}%"
+          # Verify minimum 80% coverage for all pkg/ packages
+          if (( $(echo "$coverage < 80" | bc -l) )); then
+            echo "::error::$pkg_name has ${coverage}% coverage, which is below 80% threshold"
+            exit 1
+          fi
+        done
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  lint:
+    name: Run Linters
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: true
+
+    - name: Run linters
+      run: make lint
+
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: true
+
+    - name: Build server
+      run: go build -v -o sprinkler-server ./cmd/server
+
+    - name: Build client
+      run: go build -v -o sprinkler-client ./cmd/client
+
+    - name: Verify binaries
+      run: |
+        ./sprinkler-server -h || true
+        ./sprinkler-client -h || true

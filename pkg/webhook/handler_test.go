@@ -415,3 +415,167 @@ func TestGetMapKeys(t *testing.T) {
 		})
 	}
 }
+
+// TestWebhookHandlerNoPRURL tests events with no PR URL.
+func TestWebhookHandlerNoPRURL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := srv.NewHub()
+	go h.Run(ctx)
+	defer h.Stop()
+
+	secret := "testsecret"
+	handler := NewHandler(h, secret, nil)
+
+	// Event with no PR URL (e.g., push event)
+	payload := map[string]any{
+		"action": "push",
+		"ref":    "refs/heads/main",
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "push") //nolint:canonicalheader // GitHub webhook header
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	req.Header.Set("X-Hub-Signature-256", signature)
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	// Should return 200 but not broadcast anything
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+// TestWebhookHandlerCheckEventWithEmptyPRArray tests check events with empty pull_requests array.
+func TestWebhookHandlerCheckEventWithEmptyPRArray(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := srv.NewHub()
+	go h.Run(ctx)
+	defer h.Stop()
+
+	secret := "testsecret"
+	handler := NewHandler(h, secret, nil)
+
+	// check_run with empty pull_requests array
+	payload := map[string]any{
+		"action": "completed",
+		"check_run": map[string]any{
+			"head_sha":      "abc123",
+			"pull_requests": []any{}, // Empty array
+		},
+		"repository": map[string]any{
+			"html_url": "https://github.com/owner/repo",
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "check_run") //nolint:canonicalheader // GitHub webhook header
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	req.Header.Set("X-Hub-Signature-256", signature)
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+// TestExtractPRURLVariations tests various PR URL extraction scenarios.
+func TestExtractPRURLVariations(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		eventType string
+		payload   map[string]any
+		wantURL   string
+	}{
+		{
+			name:      "pull_request with html_url",
+			eventType: "pull_request",
+			payload: map[string]any{
+				"pull_request": map[string]any{
+					"html_url": "https://github.com/owner/repo/pull/123",
+				},
+			},
+			wantURL: "https://github.com/owner/repo/pull/123",
+		},
+		{
+			name:      "check_run with single PR",
+			eventType: "check_run",
+			payload: map[string]any{
+				"check_run": map[string]any{
+					"pull_requests": []any{
+						map[string]any{
+							"number": float64(456),
+						},
+					},
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/owner/repo",
+				},
+			},
+			wantURL: "https://github.com/owner/repo/pull/456",
+		},
+		{
+			name:      "check_suite with PR",
+			eventType: "check_suite",
+			payload: map[string]any{
+				"check_suite": map[string]any{
+					"pull_requests": []any{
+						map[string]any{
+							"number": float64(789),
+						},
+					},
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/owner/repo",
+				},
+			},
+			wantURL: "https://github.com/owner/repo/pull/789",
+		},
+		{
+			name:      "event with no PR data",
+			eventType: "push",
+			payload: map[string]any{
+				"ref": "refs/heads/main",
+			},
+			wantURL: "",
+		},
+		{
+			name:      "check_run with missing repository",
+			eventType: "check_run",
+			payload: map[string]any{
+				"check_run": map[string]any{
+					"pull_requests": []any{
+						map[string]any{
+							"number": float64(100),
+						},
+					},
+				},
+				// No repository field
+			},
+			wantURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractPRURL(ctx, tt.eventType, tt.payload)
+			if result != tt.wantURL {
+				t.Errorf("ExtractPRURL() = %q, want %q", result, tt.wantURL)
+			}
+		})
+	}
+}

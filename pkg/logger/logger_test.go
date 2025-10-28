@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -214,4 +215,150 @@ func TestLargeNumberOfFields(t *testing.T) {
 	if !strings.Contains(output, "field099=99") {
 		t.Error("Last field not found")
 	}
+}
+
+// TestDebugLogger tests the Debug function
+func TestDebugLogger(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	Debug(context.Background(), "debug message", Fields{"detail": "value"})
+
+	output := buf.String()
+	// Debug level is below INFO by default, so it won't appear in output
+	// But the function should not panic
+	if output == "" {
+		// Expected: debug messages are filtered out by default
+	}
+}
+
+// TestLogAtFunction tests the LogAt function for custom source location
+func TestLogAtFunction(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	// Test with different skip values and levels
+	LogAt(slog.LevelInfo, 0, "logged at custom location", Fields{"custom": "value"})
+
+	output := buf.String()
+	if !strings.Contains(output, "level=INFO") {
+		t.Error("INFO level not found")
+	}
+	if !strings.Contains(output, "logged at custom location") {
+		t.Error("message not found")
+	}
+	if !strings.Contains(output, "custom=value") {
+		t.Error("field not found")
+	}
+}
+
+// TestLogAtWithNilFields tests LogAt with nil fields
+func TestLogAtWithNilFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	// Should not panic with nil fields
+	LogAt(slog.LevelWarn, 0, "warning message", nil)
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Error("WARN level not found")
+	}
+	if !strings.Contains(output, "warning message") {
+		t.Error("message not found")
+	}
+}
+
+// TestInfoWithNilContext tests Info function with nil context
+func TestInfoWithNilContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	// Should not panic with nil context
+	Info(nil, "test message", Fields{"key": "value"})
+
+	output := buf.String()
+	if !strings.Contains(output, `msg="test message"`) {
+		t.Error("Message not found")
+	}
+	if !strings.Contains(output, "key=value") {
+		t.Error("Field not found")
+	}
+}
+
+// TestWarnWithNilContext tests Warn function with nil context
+func TestWarnWithNilContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	// Should not panic with nil context
+	Warn(nil, "warning message", Fields{"warning": "type"})
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Error("WARN level not found")
+	}
+	if !strings.Contains(output, `msg="warning message"`) {
+		t.Error("Message not found")
+	}
+}
+
+// TestErrorWithNilContext tests Error function with nil context
+func TestErrorWithNilContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	err := errors.New("test error")
+	// Should not panic with nil context
+	Error(nil, "error occurred", err, Fields{"code": "500"})
+
+	output := buf.String()
+	if !strings.Contains(output, "level=ERROR") {
+		t.Error("ERROR level not found")
+	}
+	if !strings.Contains(output, `error="test error"`) {
+		t.Error("error field not found")
+	}
+}
+
+// TestErrorWithNilFields tests Error function with nil fields
+func TestErrorWithNilFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	err := errors.New("test error")
+	// Should not panic with nil fields
+	Error(context.Background(), "error occurred", err, nil)
+
+	output := buf.String()
+	if !strings.Contains(output, "level=ERROR") {
+		t.Error("ERROR level not found")
+	}
+	if !strings.Contains(output, `msg="error occurred"`) {
+		t.Error("Message not found")
+	}
+	if !strings.Contains(output, `error="test error"`) {
+		t.Error("error field not found")
+	}
+}
+
+// TestDebugWithNilContext tests Debug function with nil context
+func TestDebugWithNilContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(&buf)
+	SetLogger(logger)
+
+	// Should not panic with nil context
+	Debug(nil, "debug message", Fields{"debug": "info"})
+
+	// Debug level is filtered out by default, but function should not panic
+	output := buf.String()
+	_ = output // Just verify no panic occurred
 }
