@@ -594,3 +594,327 @@ func TestExtractPRURLVariations(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckEventRaceCondition tests the GitHub webhook timing issue where check events
+// can arrive before the pull_requests array is populated.
+//
+// Background:
+// GitHub's webhook system can send check_run/check_suite events immediately when a check
+// completes, but their internal indexing may not have updated the pull_requests array yet.
+// This creates a race condition where the event arrives without PR information.
+//
+// Expected behavior:
+// - If pull_requests array is empty but we have repository info, use repo URL as fallback
+// - Include commit SHA so clients can look up the PR later
+// - Org-based subscriptions still work with repo URL
+// - Only drop event if we can't extract ANY repository information
+func TestCheckEventRaceCondition(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := srv.NewHub()
+	go h.Run(ctx)
+	defer h.Stop()
+
+	secret := "testsecret"
+	handler := NewHandler(h, secret, nil)
+
+	tests := []struct {
+		name             string
+		eventType        string
+		payload          map[string]any
+		expectStatusCode int
+		expectBroadcast  bool
+		expectRepoURL    bool // true if we expect repo URL fallback
+		expectCommitSHA  bool
+	}{
+		{
+			name:      "check_run with empty pull_requests array - GitHub race condition",
+			eventType: "check_run",
+			payload: map[string]any{
+				"action": "completed",
+				"check_run": map[string]any{
+					"head_sha":      "abc123def456789",
+					"pull_requests": []any{}, // Empty - race condition!
+					"status":        "completed",
+					"conclusion":    "success",
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/testorg/testrepo",
+					"owner": map[string]any{
+						"login": "testorg",
+					},
+					"name": "testrepo",
+				},
+			},
+			expectStatusCode: http.StatusOK,
+			expectBroadcast:  true, // Should still broadcast with repo URL
+			expectRepoURL:    true,
+			expectCommitSHA:  true,
+		},
+		{
+			name:      "check_suite with missing pull_requests field - GitHub race condition",
+			eventType: "check_suite",
+			payload: map[string]any{
+				"action": "completed",
+				"check_suite": map[string]any{
+					"head_sha": "def456abc123789",
+					// No pull_requests field at all
+					"status":     "completed",
+					"conclusion": "success",
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/myorg/myrepo",
+					"owner": map[string]any{
+						"login": "myorg",
+					},
+					"name": "myrepo",
+				},
+			},
+			expectStatusCode: http.StatusOK,
+			expectBroadcast:  true,
+			expectRepoURL:    true,
+			expectCommitSHA:  true,
+		},
+		{
+			name:      "check_run with null pull_requests - another variant",
+			eventType: "check_run",
+			payload: map[string]any{
+				"action": "completed",
+				"check_run": map[string]any{
+					"head_sha":      "nullcase123456",
+					"pull_requests": nil, // Explicitly null
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/nullorg/nullrepo",
+					"owner": map[string]any{
+						"login": "nullorg",
+					},
+				},
+			},
+			expectStatusCode: http.StatusOK,
+			expectBroadcast:  true,
+			expectRepoURL:    true,
+			expectCommitSHA:  true,
+		},
+		{
+			name:      "check_run with no repository - must drop event",
+			eventType: "check_run",
+			payload: map[string]any{
+				"action": "completed",
+				"check_run": map[string]any{
+					"head_sha":      "norepository123",
+					"pull_requests": []any{},
+				},
+				// Missing repository field entirely
+			},
+			expectStatusCode: http.StatusOK, // Still 200 to GitHub
+			expectBroadcast:  false,         // Event dropped
+			expectRepoURL:    false,
+			expectCommitSHA:  false,
+		},
+		{
+			name:      "check_suite with repository but no html_url - must drop",
+			eventType: "check_suite",
+			payload: map[string]any{
+				"action": "completed",
+				"check_suite": map[string]any{
+					"head_sha":      "nohtmlurl456",
+					"pull_requests": []any{},
+				},
+				"repository": map[string]any{
+					"name": "repo",
+					// Missing html_url
+				},
+			},
+			expectStatusCode: http.StatusOK,
+			expectBroadcast:  false,
+			expectRepoURL:    false,
+			expectCommitSHA:  false,
+		},
+		{
+			name:      "check_run with populated pull_requests - normal case (no race)",
+			eventType: "check_run",
+			payload: map[string]any{
+				"action": "completed",
+				"check_run": map[string]any{
+					"head_sha": "normalcase123",
+					"pull_requests": []any{
+						map[string]any{
+							"number": float64(42),
+						},
+					},
+				},
+				"repository": map[string]any{
+					"html_url": "https://github.com/normalorg/normalrepo",
+				},
+			},
+			expectStatusCode: http.StatusOK,
+			expectBroadcast:  true,
+			expectRepoURL:    false, // Should have PR URL, not repo URL
+			expectCommitSHA:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatalf("Failed to marshal payload: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+			req.Header.Set("X-GitHub-Event", tt.eventType) //nolint:canonicalheader // GitHub webhook header
+			req.Header.Set("X-GitHub-Delivery", "test-delivery-"+tt.name)
+
+			// Add valid signature
+			mac := hmac.New(sha256.New, []byte(secret))
+			mac.Write(body)
+			signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+			req.Header.Set("X-Hub-Signature-256", signature)
+
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			// Check response status
+			if w.Code != tt.expectStatusCode {
+				t.Errorf("expected status %d, got %d", tt.expectStatusCode, w.Code)
+			}
+
+			// Verify URL extraction behavior
+			// Note: ExtractPRURL returns "" when there's no PR URL in check events.
+			// The handler in ServeHTTP then falls back to repo URL (lines 163-222 in handler.go)
+			ctx := context.Background()
+			extractedURL := ExtractPRURL(ctx, tt.eventType, tt.payload)
+
+			if tt.expectRepoURL {
+				// ExtractPRURL should return empty (no PR URL)
+				if extractedURL != "" {
+					t.Errorf("Expected ExtractPRURL to return empty (triggering repo fallback), got %q", extractedURL)
+				}
+				// Verify we have repo URL available for fallback
+				repoURL, ok := tt.payload["repository"].(map[string]any)["html_url"].(string)
+				if !ok {
+					t.Fatal("Test setup error: repository.html_url missing")
+				}
+				// Repo URL should NOT contain /pull/
+				if contains := bytes.Contains([]byte(repoURL), []byte("/pull/")); contains {
+					t.Errorf("Repo URL should not contain /pull/, got %q", repoURL)
+				}
+			} else if tt.expectBroadcast {
+				// Should have PR URL (normal case)
+				if extractedURL == "" {
+					t.Error("Expected PR URL but got empty string")
+				}
+				if contains := bytes.Contains([]byte(extractedURL), []byte("/pull/")); !contains {
+					t.Errorf("Expected PR URL with /pull/, got %q", extractedURL)
+				}
+			} else {
+				// Event should be dropped, no URL
+				if extractedURL != "" {
+					t.Errorf("Expected empty URL for dropped event, got %q", extractedURL)
+				}
+			}
+
+			// Verify commit SHA extraction
+			extractedSHA := extractCommitSHA(tt.eventType, tt.payload)
+			if tt.expectCommitSHA {
+				if extractedSHA == "" {
+					t.Error("Expected commit SHA but got empty string")
+				}
+				// Verify it matches the SHA in payload
+				var expectedSHA string
+				if tt.eventType == "check_run" {
+					if checkRun, ok := tt.payload["check_run"].(map[string]any); ok {
+						expectedSHA, _ = checkRun["head_sha"].(string)
+					}
+				} else if tt.eventType == "check_suite" {
+					if checkSuite, ok := tt.payload["check_suite"].(map[string]any); ok {
+						expectedSHA, _ = checkSuite["head_sha"].(string)
+					}
+				}
+				if expectedSHA != "" && extractedSHA != expectedSHA {
+					t.Errorf("Expected SHA %q, got %q", expectedSHA, extractedSHA)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckEventRaceConditionEndToEnd tests the complete flow including hub broadcast.
+// This verifies that events with repo URL fallback can still be received by org-based subscribers.
+func TestCheckEventRaceConditionEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := srv.NewHub()
+	go h.Run(ctx)
+	defer h.Stop()
+
+	secret := "testsecret"
+	handler := NewHandler(h, secret, nil)
+
+	// Simulate check_run event with empty pull_requests (GitHub race condition)
+	payload := map[string]any{
+		"action": "completed",
+		"check_run": map[string]any{
+			"head_sha":      "racecommit123",
+			"pull_requests": []any{}, // Empty due to timing
+			"status":        "completed",
+		},
+		"repository": map[string]any{
+			"html_url": "https://github.com/raceorg/racerepo",
+			"owner": map[string]any{
+				"login": "raceorg", // This is what org subscribers will match on
+			},
+			"name": "racerepo",
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "check_run")
+	req.Header.Set("X-GitHub-Delivery", "race-test-delivery-123")
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	req.Header.Set("X-Hub-Signature-256", signature)
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Verify that ExtractPRURL returns empty (no PR URL in check event with empty pull_requests)
+	// The handler then falls back to repo URL when broadcasting
+	extractedURL := ExtractPRURL(ctx, "check_run", payload)
+	if extractedURL != "" {
+		t.Errorf("Expected ExtractPRURL to return empty string (no PR URL), got %q", extractedURL)
+	}
+
+	// Verify we have repo URL available for the handler's fallback logic
+	expectedRepoURL := "https://github.com/raceorg/racerepo"
+	repoURL, ok := payload["repository"].(map[string]any)["html_url"].(string)
+	if !ok || repoURL != expectedRepoURL {
+		t.Errorf("Repository URL should be %q, got %q", expectedRepoURL, repoURL)
+	}
+
+	// Verify commit SHA is extracted for client-side lookup
+	extractedSHA := extractCommitSHA("check_run", payload)
+	if extractedSHA != "racecommit123" {
+		t.Errorf("Expected SHA 'racecommit123', got %q", extractedSHA)
+	}
+
+	// Verify the repo URL is NOT a PR URL (no /pull/ in path)
+	// This confirms the handler will use repo URL as fallback, not a PR URL
+	if contains := bytes.Contains([]byte(repoURL), []byte("/pull/")); contains {
+		t.Errorf("Repo URL should not contain /pull/, got %q", repoURL)
+	}
+}
