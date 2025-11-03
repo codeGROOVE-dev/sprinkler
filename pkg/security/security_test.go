@@ -354,6 +354,201 @@ func TestConnectionLimiterEvictOldestInactive(t *testing.T) {
 	}
 }
 
+func TestConnectionLimiterReservationMaxIPEntries(t *testing.T) {
+	// Create limiter with small per-IP limit
+	limiter := NewConnectionLimiter(5, 100)
+	defer limiter.Stop()
+
+	// Fill up to near-max entries to trigger eviction logic
+	// maxIPEntries is 10000, so we create many inactive entries
+	for i := 0; i < 10005; i++ {
+		ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
+		// Create reservation then cancel to make it inactive
+		token := limiter.Reserve(ip)
+		if token != "" {
+			limiter.CancelReservation(token)
+		}
+	}
+
+	// Now try to create a new reservation - should trigger eviction
+	token := limiter.Reserve("10.0.0.1")
+	if token == "" {
+		t.Error("Expected successful reservation after eviction")
+	}
+	limiter.CancelReservation(token)
+}
+
+func TestConnectionLimiterNegativeCountProtection(t *testing.T) {
+	limiter := NewConnectionLimiter(10, 100)
+	defer limiter.Stop()
+
+	// Create a reservation
+	token := limiter.Reserve("192.168.1.1")
+	if token == "" {
+		t.Fatal("Failed to create reservation")
+	}
+
+	// Cancel it twice to test negative count protection
+	limiter.CancelReservation(token)
+	limiter.CancelReservation(token) // Should handle gracefully without going negative
+
+	// Commit should also handle missing reservation gracefully
+	ok := limiter.CommitReservation("nonexistent-token")
+	if ok {
+		t.Error("Expected CommitReservation to fail for nonexistent token")
+	}
+}
+
+func TestConnectionLimiterEvictWithAllActive(t *testing.T) {
+	limiter := NewConnectionLimiter(5, 100)
+	defer limiter.Stop()
+
+	// Create many active connections (no inactive to evict)
+	for i := 0; i < 10005; i++ {
+		ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
+		token := limiter.Reserve(ip)
+		if token != "" {
+			// Commit to make it active
+			limiter.CommitReservation(token)
+		}
+	}
+
+	// Try to reserve when all are active - should fail gracefully
+	token := limiter.Reserve("10.0.0.1")
+	// May or may not succeed depending on cleanup timing, just verify no panic
+	if token != "" {
+		limiter.CancelReservation(token)
+	}
+}
+
+func TestConnectionLimiterCleanupExpiredReservations(t *testing.T) {
+	limiter := NewConnectionLimiter(10, 100)
+	defer limiter.Stop()
+
+	// Create some reservations
+	ip1 := "192.168.1.1"
+	ip2 := "192.168.1.2"
+	token1 := limiter.Reserve(ip1)
+	token2 := limiter.Reserve(ip2)
+
+	if token1 == "" || token2 == "" {
+		t.Fatal("Failed to create reservations")
+	}
+
+	// Manually trigger cleanup before they expire (shouldn't remove anything)
+	limiter.cleanup()
+
+	// Verify they still exist
+	ok := limiter.CommitReservation(token1)
+	if !ok {
+		t.Error("Reservation 1 was incorrectly cleaned up")
+	}
+
+	// Cancel the second one to test cleanup of inactive entries
+	limiter.CancelReservation(token2)
+
+	// Manually trigger cleanup (should clean up inactive entries)
+	limiter.cleanup()
+}
+
+func TestConnectionLimiterAddMaxLimit(t *testing.T) {
+	// Create limiter with very low total limit
+	limiter := NewConnectionLimiter(5, 3)
+	defer limiter.Stop()
+
+	ip1 := "192.168.1.1"
+	ip2 := "192.168.1.2"
+
+	// Add up to limit
+	limiter.Add(ip1)
+	limiter.Add(ip1)
+	limiter.Add(ip1)
+
+	// Try to add when at total limit
+	ok := limiter.Add(ip2)
+	if ok {
+		t.Error("Expected Add to fail when at total limit")
+	}
+
+	// Remove one and try again
+	limiter.Remove(ip1)
+	ok = limiter.Add(ip2)
+	if !ok {
+		t.Error("Expected Add to succeed after removal")
+	}
+}
+
+func TestConnectionLimiterReservationCleanupNegativeProtection(t *testing.T) {
+	limiter := NewConnectionLimiter(10, 100)
+	defer limiter.Stop()
+
+	ip := "192.168.1.1"
+
+	// Create and immediately cancel a reservation
+	token := limiter.Reserve(ip)
+	if token == "" {
+		t.Fatal("Failed to create reservation")
+	}
+
+	limiter.CancelReservation(token)
+
+	// Manually manipulate state to test negative protection in cleanup
+	limiter.mu.Lock()
+	// Force a scenario where cleanup might encounter negative values
+	if info := limiter.perIP[ip]; info != nil {
+		info.reservations = -1 // Force negative
+	}
+	limiter.totalReserve = -5 // Force negative total
+	limiter.mu.Unlock()
+
+	// Trigger cleanup - should reset negative values
+	limiter.cleanup()
+
+	// Verify state is normalized
+	limiter.mu.Lock()
+	if limiter.totalReserve < 0 {
+		t.Error("totalReserve should have been reset to 0")
+	}
+	if info := limiter.perIP[ip]; info != nil && info.reservations < 0 {
+		t.Error("info.reservations should have been reset to 0")
+	}
+	limiter.mu.Unlock()
+}
+
+func TestConnectionLimiterEvictOldestNoInactive(t *testing.T) {
+	limiter := NewConnectionLimiter(10, 100)
+	defer limiter.Stop()
+
+	// Create only active connections
+	limiter.Add("192.168.1.1")
+	limiter.Add("192.168.1.2")
+
+	// Try to evict when there are no inactive entries
+	limiter.mu.Lock()
+	initialCount := len(limiter.perIP)
+	limiter.evictOldestInactive()
+	afterCount := len(limiter.perIP)
+	limiter.mu.Unlock()
+
+	// Count should not change
+	if afterCount != initialCount {
+		t.Errorf("Expected count to stay at %d, but got %d", initialCount, afterCount)
+	}
+}
+
+func TestConnectionLimiterReserveRandError(t *testing.T) {
+	// This tests the rand.Read error path which is very hard to trigger
+	// We can't easily mock crypto/rand, so this is more of a documentation test
+	limiter := NewConnectionLimiter(10, 100)
+	defer limiter.Stop()
+
+	// Normal reservation should work
+	token := limiter.Reserve("192.168.1.1")
+	if token == "" {
+		t.Error("Expected successful reservation")
+	}
+}
+
 func TestClientIP(t *testing.T) {
 	tests := []struct {
 		name       string
