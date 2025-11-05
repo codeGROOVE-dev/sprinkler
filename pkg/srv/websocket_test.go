@@ -2,10 +2,12 @@ package srv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2515,4 +2517,343 @@ func TestWildcardWithMultipleOrgs(t *testing.T) {
 	if mockClient.UserAndOrgsCalls != 1 {
 		t.Errorf("Expected 1 UserAndOrgs call, got %d", mockClient.UserAndOrgsCalls)
 	}
+}
+
+func TestCloseWebSocketAlreadyClosed(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+
+	wc := &wsCloser{ws: ws}
+	// Close it first
+	_ = wc.Close()
+
+	// Now close again (should handle "closed network connection" error path)
+	closeWebSocket(wc, nil, "127.0.0.1")
+}
+
+// ========== Critical Server-Side WebSocket Bug Integration Tests ==========
+
+// TestWebSocketCloseErrors tests error handling during WebSocket close operations.
+func TestWebSocketCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("close already closed connection", func(t *testing.T) {
+		server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+			time.Sleep(50 * time.Millisecond)
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+		if err != nil {
+			t.Fatalf("Failed to dial: %v", err)
+		}
+
+		wc := &wsCloser{ws: ws}
+		_ = wc.Close()
+
+		// Close again - should handle "closed network connection" error
+		closeWebSocket(wc, nil, "127.0.0.1")
+	})
+
+	t.Run("close with broken pipe", func(t *testing.T) {
+		// Simulate broken pipe by forcefully closing underlying connection
+		server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+			time.Sleep(20 * time.Millisecond)
+			// Force close to cause broken pipe
+			ws.Close()
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+		if err != nil {
+			t.Fatalf("Failed to dial: %v", err)
+		}
+
+		time.Sleep(30 * time.Millisecond)
+		wc := &wsCloser{ws: ws}
+		closeWebSocket(wc, nil, "127.0.0.1")
+	})
+}
+
+// TestSendErrorResponseFailure tests what happens when error response can't be sent.
+func TestSendErrorResponseFailure(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		// Close connection immediately to cause send error
+		ws.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+
+	// Try to send error response to closed connection
+	ctx := context.Background()
+	errInfo := errorInfo{
+		code:    "test_error",
+		message: "Test error",
+		reason:  "test",
+	}
+
+	err = sendErrorResponse(ctx, ws, errInfo, "127.0.0.1")
+	if err == nil {
+		t.Log("Note: sendErrorResponse succeeded despite closed connection")
+	}
+}
+
+// TestHandleAuthErrorWithSendFailure tests handleAuthError when sendErrorResponse fails.
+func TestHandleAuthErrorWithSendFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	hub := NewHub()
+	go hub.Run(ctx)
+	defer hub.Stop()
+
+	connLimiter := security.NewConnectionLimiter(10, 50)
+	defer connLimiter.Stop()
+
+	mockGHClient := &github.MockClient{
+		Err: errors.New("auth failed"),
+	}
+
+	handler := NewWebSocketHandler(hub, connLimiter, nil)
+	handler.githubClientFactory = func(token string) github.APIClient {
+		return mockGHClient
+	}
+
+	// Create server that immediately closes connection
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		ws.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+
+	// Try to handle auth error on closed connection
+	params := authErrorParams{
+		logContext: "test",
+		username:   "testuser",
+		orgName:    "testorg",
+		userOrgs:   []string{},
+		ip:         "127.0.0.1",
+	}
+
+	err = handler.handleAuthError(ctx, ws, errors.New("auth error"), params)
+	// Should return error but not panic
+	if err == nil {
+		t.Error("Expected handleAuthError to return error when sendErrorResponse fails")
+	}
+}
+
+// TestConcurrentClientCloseOperations tests concurrent close operations on client.
+func TestConcurrentClientCloseOperations(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	hub := NewHub()
+	go hub.Run(ctx)
+	defer hub.Stop()
+
+	for i := 0; i < 50; i++ {
+		client := &Client{
+			ID:      fmt.Sprintf("test-client-%d", i),
+			send:    make(chan Event, 10),
+			control: make(chan map[string]any, 10),
+			done:    make(chan struct{}),
+		}
+
+		// Trigger multiple concurrent closes
+		var wg sync.WaitGroup
+		for j := 0; j < 5; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				client.Close()
+			}()
+		}
+		wg.Wait()
+
+		// Should not panic
+	}
+}
+
+// TestReadSubscriptionWithMalformedJSON tests handling of malformed subscription data.
+func TestReadSubscriptionWithMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	hub := NewHub()
+	go hub.Run(ctx)
+	defer hub.Stop()
+
+	connLimiter := security.NewConnectionLimiter(10, 50)
+	defer connLimiter.Stop()
+
+	handler := NewWebSocketHandlerForTest(hub, connLimiter, nil)
+
+	// Test sending oversized payload
+	oversized := make([]byte, 2*1024*1024) // 2MB - exceeds maxSubscriptionSize
+	for i := range oversized {
+		oversized[i] = 'a'
+	}
+
+	server := httptest.NewServer(websocket.Handler(handler.Handle))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer ws.Close()
+
+	// Send oversized payload - should be rejected
+	err = websocket.Message.Send(ws, oversized)
+	// Connection may be closed or error returned - either is acceptable
+	_ = err
+}
+
+// TestValidateAuthConcurrentAccess tests concurrent access to validateAuth.
+func TestValidateAuthConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	hub := NewHub()
+	go hub.Run(ctx)
+	defer hub.Stop()
+
+	connLimiter := security.NewConnectionLimiter(10, 50)
+	defer connLimiter.Stop()
+
+	mockGHClient := &github.MockClient{
+		Username: "testuser",
+		Orgs:     []string{"org1", "org2"},
+	}
+
+	handler := NewWebSocketHandler(hub, connLimiter, nil)
+	handler.githubClientFactory = func(token string) github.APIClient {
+		return mockGHClient
+	}
+
+	// Create many concurrent WebSocket connections
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+				time.Sleep(50 * time.Millisecond)
+			}))
+			defer server.Close()
+
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+			ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+
+			sub := &Subscription{
+				Organization: "org1",
+			}
+
+			_, _ = handler.validateAuth(ctx, ws, sub, "test-token", "127.0.0.1")
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestHandleRapidDisconnectReconnect tests rapid connection churn.
+func TestHandleRapidDisconnectReconnect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	hub := NewHub()
+	go hub.Run(ctx)
+	defer hub.Stop()
+
+	connLimiter := security.NewConnectionLimiter(10, 50)
+	defer connLimiter.Stop()
+
+	handler := NewWebSocketHandlerForTest(hub, connLimiter, nil)
+
+	for i := 0; i < 30; i++ {
+		server := httptest.NewServer(websocket.Handler(handler.Handle))
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+		if err != nil {
+			server.Close()
+			continue
+		}
+
+		// Send subscription
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"organization": "*",
+		})
+
+		// Immediately close
+		ws.Close()
+		server.Close()
+
+		// Brief pause
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestHandleConnectionDuringShutdown tests connection handling during hub shutdown.
+func TestHandleConnectionDuringShutdown(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hub := NewHub()
+	go hub.Run(ctx)
+
+	connLimiter := security.NewConnectionLimiter(10, 50)
+	defer connLimiter.Stop()
+
+	handler := NewWebSocketHandlerForTest(hub, connLimiter, nil)
+
+	server := httptest.NewServer(websocket.Handler(handler.Handle))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+
+	// Send subscription
+	_ = websocket.JSON.Send(ws, map[string]string{
+		"organization": "*",
+	})
+
+	// Trigger shutdown while connection is active
+	cancel()
+	hub.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+	ws.Close()
 }

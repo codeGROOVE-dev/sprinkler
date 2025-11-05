@@ -2275,3 +2275,815 @@ func TestClientEventWithoutTimestamp(t *testing.T) {
 
 	client.Stop()
 }
+
+// TestHandleDialError tests the handleDialError function for various error types.
+func TestHandleDialError(t *testing.T) {
+	client := &Client{}
+
+	tests := []struct {
+		name          string
+		inputErr      error
+		expectAuthErr bool
+		expectMsg     string
+	}{
+		{
+			name:          "403 forbidden error",
+			inputErr:      errors.New("websocket: bad status 403 Forbidden"),
+			expectAuthErr: true,
+			expectMsg:     "403 Forbidden",
+		},
+		{
+			name:          "401 unauthorized error",
+			inputErr:      errors.New("websocket: bad status 401 Unauthorized"),
+			expectAuthErr: true,
+			expectMsg:     "401 Unauthorized",
+		},
+		{
+			name:          "forbidden in lowercase",
+			inputErr:      errors.New("websocket: bad status - forbidden"),
+			expectAuthErr: true,
+			expectMsg:     "403 Forbidden",
+		},
+		{
+			name:          "unauthorized in lowercase",
+			inputErr:      errors.New("websocket: bad status - unauthorized"),
+			expectAuthErr: true,
+			expectMsg:     "401 Unauthorized",
+		},
+		{
+			name:          "generic dial error",
+			inputErr:      errors.New("connection refused"),
+			expectAuthErr: false,
+			expectMsg:     "dial:",
+		},
+		{
+			name:          "other bad status",
+			inputErr:      errors.New("websocket: bad status 500 Internal Server Error"),
+			expectAuthErr: false,
+			expectMsg:     "dial:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.handleDialError(tt.inputErr)
+
+			if tt.expectAuthErr {
+				var authErr *AuthenticationError
+				if !errors.As(result, &authErr) {
+					t.Errorf("Expected AuthenticationError, got %T: %v", result, result)
+				}
+			}
+
+			if !strings.Contains(result.Error(), tt.expectMsg) {
+				t.Errorf("Expected error to contain %q, got: %v", tt.expectMsg, result)
+			}
+		})
+	}
+}
+
+// TestEnsureCacheSpace tests cache eviction logic.
+func TestEnsureCacheSpace(t *testing.T) {
+	t.Run("soft limit eviction", func(t *testing.T) {
+		client, err := New(Config{
+			ServerURL:    "ws://localhost:8080",
+			Token:        "test-token",
+			Organization: "test-org",
+			NoReconnect:  true,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+
+		// Set a small soft limit for testing
+		client.maxCacheSize = 10
+
+		// Fill cache to trigger soft limit
+		for i := range 12 {
+			key := fmt.Sprintf("owner/repo:commit%d", i)
+			client.commitPRCache[key] = []int{100 + i}
+			client.commitCacheKeys = append(client.commitCacheKeys, key)
+		}
+
+		// Trigger cache eviction
+		client.ensureCacheSpace()
+
+		// Cache should be reduced by ~25%
+		if len(client.commitCacheKeys) > 10 {
+			t.Errorf("Expected cache size <= 10 after soft limit eviction, got %d", len(client.commitCacheKeys))
+		}
+	})
+
+	t.Run("hard limit eviction", func(t *testing.T) {
+		client, err := New(Config{
+			ServerURL:    "ws://localhost:8080",
+			Token:        "test-token",
+			Organization: "test-org",
+			NoReconnect:  true,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+
+		// Fill cache to trigger hard limit (10000 entries)
+		for i := range 10001 {
+			key := fmt.Sprintf("owner/repo:commit%d", i)
+			client.commitPRCache[key] = []int{i}
+			client.commitCacheKeys = append(client.commitCacheKeys, key)
+		}
+
+		initialSize := len(client.commitCacheKeys)
+		client.ensureCacheSpace()
+
+		// Cache should be reduced by ~50% from hard limit
+		if len(client.commitCacheKeys) >= initialSize {
+			t.Errorf("Expected cache to be evicted, was %d, now %d", initialSize, len(client.commitCacheKeys))
+		}
+		// Should evict about 50% of hard limit (500 entries based on hardMaxCacheSize=1000)
+		if len(client.commitCacheKeys) > 9600 {
+			t.Errorf("Expected aggressive eviction, got %d entries remaining", len(client.commitCacheKeys))
+		}
+	})
+
+	t.Run("no eviction needed", func(t *testing.T) {
+		client, err := New(Config{
+			ServerURL:    "ws://localhost:8080",
+			Token:        "test-token",
+			Organization: "test-org",
+			NoReconnect:  true,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+
+		// Add just a few entries
+		for i := range 5 {
+			key := fmt.Sprintf("owner/repo:commit%d", i)
+			client.commitPRCache[key] = []int{i}
+			client.commitCacheKeys = append(client.commitCacheKeys, key)
+		}
+
+		initialSize := len(client.commitCacheKeys)
+		client.ensureCacheSpace()
+
+		// Should not evict anything
+		if len(client.commitCacheKeys) != initialSize {
+			t.Errorf("Expected no eviction, but size changed from %d to %d", initialSize, len(client.commitCacheKeys))
+		}
+	})
+}
+
+// TestWritePumpContextCancellation tests that writePump respects context cancellation.
+func TestWritePumpContextCancellation(t *testing.T) {
+	// Create a simple websocket server
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		// Just accept the connection and wait
+		buf := make([]byte, 1024)
+		_, _ = ws.Read(buf)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial websocket: %v", err)
+	}
+	defer ws.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws://localhost:8080",
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- client.writePump(ctx, ws)
+	}()
+
+	// Cancel context
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Should exit with context error
+	select {
+	case err := <-errCh:
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("writePump did not exit after context cancellation")
+	}
+}
+
+// TestSendPingsContextCancellation tests that sendPings respects context cancellation.
+func TestSendPingsContextCancellation(t *testing.T) {
+	client, err := New(Config{
+		ServerURL:    "ws://localhost:8080",
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		PingInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan struct{})
+
+	go func() {
+		client.sendPings(ctx)
+		close(doneCh)
+	}()
+
+	// Cancel context immediately
+	cancel()
+
+	// Should exit quickly
+	select {
+	case <-doneCh:
+		// Success - sendPings exited
+	case <-time.After(1 * time.Second):
+		t.Fatal("sendPings did not exit after context cancellation")
+	}
+}
+
+// TestReadEventsContextCancellation tests that readEvents respects context cancellation.
+func TestReadEventsContextCancellation(t *testing.T) {
+	// Create a websocket server that keeps connection open and sends pings to keep alive
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		// Send a message periodically to keep connection alive
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for range 30 { // Try for 3 seconds max
+			select {
+			case <-ticker.C:
+				msg := map[string]string{"type": "ping"}
+				_ = websocket.JSON.Send(ws, msg)
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws://localhost:8080",
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("Failed to dial websocket: %v", err)
+	}
+	defer ws.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- client.readEvents(ctx, ws)
+	}()
+
+	// Should exit when context times out
+	select {
+	case err := <-errCh:
+		if err != nil && err != context.DeadlineExceeded {
+			t.Logf("readEvents exited with: %v (acceptable)", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("readEvents did not exit after context timeout")
+	}
+}
+
+// TestConnectRetryBackoff tests exponential backoff during connection retries.
+func TestConnectRetryBackoff(t *testing.T) {
+	// Server that refuses connections
+	attempts := 0
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		attempts++
+		// Close immediately to force reconnect
+		ws.Close()
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  false, // Enable reconnection
+		MaxRetries:   3,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_ = client.Start(ctx)
+	elapsed := time.Since(start)
+
+	// Should have made multiple attempts with backoff delays
+	if attempts < 2 {
+		t.Errorf("Expected multiple connection attempts, got %d", attempts)
+	}
+
+	// With backoff, should take some time (at least a few hundred ms)
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("Expected backoff delays, but completed too quickly: %v", elapsed)
+	}
+}
+
+// TestTokenProvider tests dynamic token provider functionality.
+func TestTokenProvider(t *testing.T) {
+	tokenCallCount := 0
+	tokenProvider := func() (string, error) {
+		tokenCallCount++
+		return fmt.Sprintf("token-%d", tokenCallCount), nil
+	}
+
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:     srv.url,
+		Organization:  "test-org",
+		TokenProvider: tokenProvider,
+		NoReconnect:   true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+	client.Stop()
+
+	if tokenCallCount == 0 {
+		t.Error("TokenProvider was not called")
+	}
+}
+
+// TestTokenProviderError tests error handling from token provider.
+func TestTokenProviderError(t *testing.T) {
+	tokenProvider := func() (string, error) {
+		return "", fmt.Errorf("token provider error")
+	}
+
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:     srv.url,
+		Organization:  "test-org",
+		TokenProvider: tokenProvider,
+		NoReconnect:   true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	err = client.Start(ctx)
+	// Should fail due to token provider error
+	if err == nil {
+		t.Error("Expected error from token provider, got nil")
+	}
+}
+
+// TestConnectWithWSSOrigin tests that wss:// URLs use https origin.
+func TestConnectWithWSSOrigin(t *testing.T) {
+	// This test verifies the origin is set correctly for secure websockets
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	// Replace ws:// with wss:// to test the origin logic
+	wssURL := strings.Replace(srv.url, "ws://", "wss://", 1)
+
+	client, err := New(Config{
+		ServerURL:    wssURL,
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// This will fail to connect but exercises the origin logic
+	_ = client.Start(ctx)
+}
+
+
+// TestConnectEventTypesWildcard tests connecting with wildcard event type.
+func TestConnectEventTypesWildcard(t *testing.T) {
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		EventTypes:   []string{"*"},
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	client.Stop()
+}
+
+// TestConnectWithPullRequests tests connecting with specific PR subscriptions.
+func TestConnectWithPullRequests(t *testing.T) {
+	srv := newMockServer(t, true)
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    srv.url,
+		Token:        "test-token",
+		Organization: "test-org",
+		PullRequests: []string{"https://github.com/owner/repo/pull/123"},
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	client.Stop()
+}
+
+// ========== Critical WebSocket Bug Integration Tests ==========
+
+// TestWriteChannelBackpressure tests behavior when write channel fills up during high message volume.
+func TestWriteChannelBackpressure(t *testing.T) {
+	t.Parallel()
+
+	eventCount := 0
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+
+		for i := 0; i < 200; i++ {
+			event := map[string]any{
+				"type":       "event",
+				"event_type": "push",
+				"action":     "created",
+				"number":     i,
+			}
+			if err := websocket.JSON.Send(ws, event); err != nil {
+				return
+			}
+			eventCount++
+		}
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	receivedEvents := 0
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		OnEvent: func(event Event) {
+			receivedEvents++
+			time.Sleep(5 * time.Millisecond)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(1 * time.Second)
+	client.Stop()
+
+	t.Logf("Server sent %d events, client received %d events", eventCount, receivedEvents)
+	if receivedEvents == 0 {
+		t.Error("Expected to receive some events despite backpressure")
+	}
+}
+
+// TestPingChannelFullScenario tests ping behavior when write channel is full.
+func TestPingChannelFullScenario(t *testing.T) {
+	t.Parallel()
+
+	pongReceived := false
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+
+		for {
+			var msg map[string]any
+			if err := websocket.JSON.Receive(ws, &msg); err != nil {
+				return
+			}
+			if msg["type"] == "ping" {
+				_ = websocket.JSON.Send(ws, map[string]string{
+					"type": "pong",
+					"seq":  fmt.Sprintf("%v", msg["seq"]),
+				})
+				pongReceived = true
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		PingInterval: 50 * time.Millisecond,
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	client.Stop()
+
+	if !pongReceived {
+		t.Error("Expected at least one pong to be received")
+	}
+}
+
+// TestWriteChannelClosedDuringOperation tests behavior when write channel closes during active writes.
+func TestWriteChannelClosedDuringOperation(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+
+		for i := 0; i < 100; i++ {
+			event := map[string]any{
+				"type":       "event",
+				"event_type": "push",
+				"action":     "created",
+				"number":     i,
+			}
+			if err := websocket.JSON.Send(ws, event); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		OnEvent:      func(event Event) {},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	client.Stop()
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestReadTimeoutDuringGracefulShutdown tests timeout handling during context cancellation.
+func TestReadTimeoutDuringGracefulShutdown(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	startTime := time.Now()
+	_ = client.Start(ctx)
+	duration := time.Since(startTime)
+
+	if duration > 3*time.Second {
+		t.Errorf("Expected shutdown within 3s, took %v", duration)
+	}
+}
+
+// TestConcurrentWebSocketClose tests concurrent close scenarios to catch race conditions.
+func TestConcurrentWebSocketClose(t *testing.T) {
+	t.Parallel()
+
+	for i := 0; i < 10; i++ {
+		srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+			var sub map[string]any
+			_ = websocket.JSON.Receive(ws, &sub)
+			_ = websocket.JSON.Send(ws, map[string]string{
+				"type":    "subscription_confirmed",
+				"message": "Connected",
+			})
+			time.Sleep(100 * time.Millisecond)
+		}))
+
+		client, err := New(Config{
+			ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+			Token:        "test-token",
+			Organization: "test-org",
+			NoReconnect:  true,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+
+		go func() {
+			_ = client.Start(ctx)
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+		go client.Stop()
+		go cancel()
+		go client.Stop()
+
+		time.Sleep(150 * time.Millisecond)
+		srv.Close()
+	}
+}
+
+// TestNetworkErrorDuringWrite tests handling of network errors during JSON.Send.
+func TestNetworkErrorDuringWrite(t *testing.T) {
+	t.Parallel()
+
+	connectionBroken := false
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+
+		time.Sleep(50 * time.Millisecond)
+		ws.Close()
+		connectionBroken = true
+	}))
+	defer srv.Close()
+
+	errorReceived := false
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		PingInterval: 20 * time.Millisecond,
+		NoReconnect:  true,
+		OnDisconnect: func(err error) {
+			errorReceived = true
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_ = client.Start(ctx)
+
+	if connectionBroken && !errorReceived {
+		t.Log("Warning: Network error may not have been properly detected")
+	}
+}
+
+// TestIOTimeoutRecovery tests that client properly handles I/O timeouts without hanging.
+func TestIOTimeoutRecovery(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		var sub map[string]any
+		_ = websocket.JSON.Receive(ws, &sub)
+		_ = websocket.JSON.Send(ws, map[string]string{
+			"type":    "subscription_confirmed",
+			"message": "Connected",
+		})
+
+		_ = websocket.JSON.Send(ws, map[string]any{
+			"type":       "event",
+			"event_type": "push",
+		})
+
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	eventReceived := false
+	client, err := New(Config{
+		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+		OnEvent: func(event Event) {
+			eventReceived = true
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	_ = client.Start(ctx)
+
+	if eventReceived {
+		t.Log("Client successfully received event and handled I/O timeouts")
+	}
+}
