@@ -2474,7 +2474,7 @@ func TestWritePumpContextCancellation(t *testing.T) {
 	// Should exit with context error
 	select {
 	case err := <-errCh:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Expected context.Canceled, got: %v", err)
 		}
 	case <-time.After(1 * time.Second):
@@ -2523,11 +2523,9 @@ func TestReadEventsContextCancellation(t *testing.T) {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for range 30 { // Try for 3 seconds max
-			select {
-			case <-ticker.C:
-				msg := map[string]string{"type": "ping"}
-				_ = websocket.JSON.Send(ws, msg)
-			}
+			<-ticker.C
+			msg := map[string]string{"type": "ping"}
+			_ = websocket.JSON.Send(ws, msg)
 		}
 	}))
 	defer srv.Close()
@@ -2560,7 +2558,7 @@ func TestReadEventsContextCancellation(t *testing.T) {
 	// Should exit when context times out
 	select {
 	case err := <-errCh:
-		if err != nil && err != context.DeadlineExceeded {
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			t.Logf("readEvents exited with: %v (acceptable)", err)
 		}
 	case <-time.After(1 * time.Second):
@@ -2699,7 +2697,6 @@ func TestConnectWithWSSOrigin(t *testing.T) {
 	_ = client.Start(ctx)
 }
 
-
 // TestConnectEventTypesWildcard tests connecting with wildcard event type.
 func TestConnectEventTypesWildcard(t *testing.T) {
 	srv := newMockServer(t, true)
@@ -2769,7 +2766,7 @@ func TestWriteChannelBackpressure(t *testing.T) {
 			"message": "Connected",
 		})
 
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			event := map[string]any{
 				"type":       "event",
 				"event_type": "push",
@@ -2883,7 +2880,7 @@ func TestWriteChannelClosedDuringOperation(t *testing.T) {
 			"message": "Connected",
 		})
 
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			event := map[string]any{
 				"type":       "event",
 				"event_type": "push",
@@ -2962,7 +2959,7 @@ func TestReadTimeoutDuringGracefulShutdown(t *testing.T) {
 func TestConcurrentWebSocketClose(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 			var sub map[string]any
 			_ = websocket.JSON.Receive(ws, &sub)

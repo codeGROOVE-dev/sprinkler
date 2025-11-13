@@ -2548,6 +2548,7 @@ func TestWebSocketCloseErrors(t *testing.T) {
 	t.Parallel()
 
 	t.Run("close already closed connection", func(t *testing.T) {
+		t.Parallel()
 		server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 			time.Sleep(50 * time.Millisecond)
 		}))
@@ -2567,6 +2568,7 @@ func TestWebSocketCloseErrors(t *testing.T) {
 	})
 
 	t.Run("close with broken pipe", func(t *testing.T) {
+		t.Parallel()
 		// Simulate broken pipe by forcefully closing underlying connection
 		server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 			time.Sleep(20 * time.Millisecond)
@@ -2675,7 +2677,7 @@ func TestConcurrentClientCloseOperations(t *testing.T) {
 	go hub.Run(ctx)
 	defer hub.Stop()
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		client := &Client{
 			ID:      fmt.Sprintf("test-client-%d", i),
 			send:    make(chan Event, 10),
@@ -2685,7 +2687,7 @@ func TestConcurrentClientCloseOperations(t *testing.T) {
 
 		// Trigger multiple concurrent closes
 		var wg sync.WaitGroup
-		for j := 0; j < 5; j++ {
+		for range 5 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -2758,9 +2760,9 @@ func TestValidateAuthConcurrentAccess(t *testing.T) {
 
 	// Create many concurrent WebSocket connections
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(1)
-		go func(id int) {
+		go func() {
 			defer wg.Done()
 
 			server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
@@ -2780,7 +2782,7 @@ func TestValidateAuthConcurrentAccess(t *testing.T) {
 			}
 
 			_, _ = handler.validateAuth(ctx, ws, sub, "test-token", "127.0.0.1")
-		}(i)
+		}()
 	}
 	wg.Wait()
 }
@@ -2799,7 +2801,7 @@ func TestHandleRapidDisconnectReconnect(t *testing.T) {
 
 	handler := NewWebSocketHandlerForTest(hub, connLimiter, nil)
 
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		server := httptest.NewServer(websocket.Handler(handler.Handle))
 
 		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")

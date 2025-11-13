@@ -361,7 +361,7 @@ func TestConnectionLimiterReservationMaxIPEntries(t *testing.T) {
 
 	// Fill up to near-max entries to trigger eviction logic
 	// maxIPEntries is 10000, so we create many inactive entries
-	for i := 0; i < 10005; i++ {
+	for i := range 10005 {
 		ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
 		// Create reservation then cancel to make it inactive
 		token := limiter.Reserve(ip)
@@ -404,7 +404,7 @@ func TestConnectionLimiterEvictWithAllActive(t *testing.T) {
 	defer limiter.Stop()
 
 	// Create many active connections (no inactive to evict)
-	for i := 0; i < 10005; i++ {
+	for i := range 10005 {
 		ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
 		token := limiter.Reserve(ip)
 		if token != "" {

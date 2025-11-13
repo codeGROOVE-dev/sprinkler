@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,8 +106,8 @@ func TestAuthenticatedUser_RateLimit(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		w.Header().Set("X-RateLimit-Remaining", "0")
-		w.Header().Set("X-RateLimit-Reset", "1234567890")
+		w.Header().Set("X-RateLimit-Remaining", "0")      //nolint:canonicalheader // GitHub API header
+		w.Header().Set("X-RateLimit-Reset", "1234567890") //nolint:canonicalheader // GitHub API header
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
 	}))
@@ -841,16 +840,6 @@ func TestLargeResponseBody(t *testing.T) {
 }
 
 // TestBrokenPipeError simulates a broken pipe during response read.
-type brokenReader struct{}
-
-func (b *brokenReader) Read(p []byte) (n int, err error) {
-	return 0, io.ErrUnexpectedEOF
-}
-
-func (b *brokenReader) Close() error {
-	return nil
-}
-
 // TestUnexpectedStatusCodes tests handling of various unexpected status codes.
 func TestUnexpectedStatusCodes(t *testing.T) {
 	t.Parallel()
@@ -869,6 +858,7 @@ func TestUnexpectedStatusCodes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			attempts := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attempts++
@@ -903,6 +893,7 @@ func TestMockClient(t *testing.T) {
 	t.Parallel()
 
 	t.Run("UserAndOrgs success", func(t *testing.T) {
+		t.Parallel()
 		mock := &MockClient{
 			Username: "testuser",
 			Orgs:     []string{"org1", "org2"},
@@ -926,6 +917,7 @@ func TestMockClient(t *testing.T) {
 	})
 
 	t.Run("UserAndOrgs error", func(t *testing.T) {
+		t.Parallel()
 		mockErr := fmt.Errorf("mock error")
 		mock := &MockClient{
 			Err: mockErr,
@@ -943,6 +935,7 @@ func TestMockClient(t *testing.T) {
 	})
 
 	t.Run("ValidateOrgMembership success", func(t *testing.T) {
+		t.Parallel()
 		mock := &MockClient{
 			Username: "testuser",
 			Orgs:     []string{"org1", "org2"},
@@ -969,6 +962,7 @@ func TestMockClient(t *testing.T) {
 	})
 
 	t.Run("ValidateOrgMembership not member", func(t *testing.T) {
+		t.Parallel()
 		mock := &MockClient{
 			Username: "testuser",
 			Orgs:     []string{"org1", "org2"},
@@ -993,6 +987,7 @@ func TestMockClient(t *testing.T) {
 	})
 
 	t.Run("ValidateOrgMembership error", func(t *testing.T) {
+		t.Parallel()
 		mockErr := fmt.Errorf("mock validation error")
 		mock := &MockClient{
 			Err: mockErr,
@@ -1010,6 +1005,7 @@ func TestMockClient(t *testing.T) {
 	})
 
 	t.Run("multiple calls tracking", func(t *testing.T) {
+		t.Parallel()
 		mock := &MockClient{
 			Username: "testuser",
 			Orgs:     []string{"org1"},
@@ -1462,13 +1458,15 @@ func TestUserAndOrgs_TokenTypeDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/installation/repositories" {
+				switch r.URL.Path {
+				case "/installation/repositories":
 					w.WriteHeader(http.StatusNotFound)
-				} else if r.URL.Path == "/user" {
+				case "/user":
 					w.WriteHeader(http.StatusOK)
 					_ = json.NewEncoder(w).Encode(User{Login: "testuser"})
-				} else if r.URL.Path == "/user/orgs" {
+				case "/user/orgs":
 					w.WriteHeader(http.StatusOK)
 					_ = json.NewEncoder(w).Encode([]Organization{})
 				}

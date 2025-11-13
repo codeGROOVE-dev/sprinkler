@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/srv"
@@ -608,7 +609,7 @@ func TestExtractPRURLVariations(t *testing.T) {
 // - Include commit SHA so clients can look up the PR later
 // - Org-based subscriptions still work with repo URL
 // - Only drop event if we can't extract ANY repository information
-func TestCheckEventRaceCondition(t *testing.T) {
+func TestCheckEventRaceCondition(t *testing.T) { //nolint:gocognit,maintidx // Test requires comprehensive validation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -764,8 +765,8 @@ func TestCheckEventRaceCondition(t *testing.T) {
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
-			req.Header.Set("X-GitHub-Event", tt.eventType) //nolint:canonicalheader // GitHub webhook header
-			req.Header.Set("X-GitHub-Delivery", "test-delivery-"+tt.name)
+			req.Header.Set("X-GitHub-Event", tt.eventType)                //nolint:canonicalheader // GitHub webhook header
+			req.Header.Set("X-GitHub-Delivery", "test-delivery-"+tt.name) //nolint:canonicalheader // GitHub webhook header
 
 			// Add valid signature
 			mac := hmac.New(sha256.New, []byte(secret))
@@ -787,7 +788,8 @@ func TestCheckEventRaceCondition(t *testing.T) {
 			ctx := context.Background()
 			extractedURL := ExtractPRURL(ctx, tt.eventType, tt.payload)
 
-			if tt.expectRepoURL {
+			switch {
+			case tt.expectRepoURL:
 				// ExtractPRURL should return empty (no PR URL)
 				if extractedURL != "" {
 					t.Errorf("Expected ExtractPRURL to return empty (triggering repo fallback), got %q", extractedURL)
@@ -798,18 +800,18 @@ func TestCheckEventRaceCondition(t *testing.T) {
 					t.Fatal("Test setup error: repository.html_url missing")
 				}
 				// Repo URL should NOT contain /pull/
-				if contains := bytes.Contains([]byte(repoURL), []byte("/pull/")); contains {
+				if contains := strings.Contains(repoURL, "/pull/"); contains {
 					t.Errorf("Repo URL should not contain /pull/, got %q", repoURL)
 				}
-			} else if tt.expectBroadcast {
+			case tt.expectBroadcast:
 				// Should have PR URL (normal case)
 				if extractedURL == "" {
 					t.Error("Expected PR URL but got empty string")
 				}
-				if contains := bytes.Contains([]byte(extractedURL), []byte("/pull/")); !contains {
+				if contains := strings.Contains(extractedURL, "/pull/"); !contains {
 					t.Errorf("Expected PR URL with /pull/, got %q", extractedURL)
 				}
-			} else {
+			default:
 				// Event should be dropped, no URL
 				if extractedURL != "" {
 					t.Errorf("Expected empty URL for dropped event, got %q", extractedURL)
@@ -824,11 +826,12 @@ func TestCheckEventRaceCondition(t *testing.T) {
 				}
 				// Verify it matches the SHA in payload
 				var expectedSHA string
-				if tt.eventType == "check_run" {
+				switch tt.eventType {
+				case "check_run":
 					if checkRun, ok := tt.payload["check_run"].(map[string]any); ok {
 						expectedSHA, _ = checkRun["head_sha"].(string)
 					}
-				} else if tt.eventType == "check_suite" {
+				case "check_suite":
 					if checkSuite, ok := tt.payload["check_suite"].(map[string]any); ok {
 						expectedSHA, _ = checkSuite["head_sha"].(string)
 					}
@@ -877,8 +880,8 @@ func TestCheckEventRaceConditionEndToEnd(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "check_run")
-	req.Header.Set("X-GitHub-Delivery", "race-test-delivery-123")
+	req.Header.Set("X-GitHub-Event", "check_run")                 //nolint:canonicalheader // GitHub webhook header
+	req.Header.Set("X-GitHub-Delivery", "race-test-delivery-123") //nolint:canonicalheader // GitHub webhook header
 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
@@ -914,7 +917,7 @@ func TestCheckEventRaceConditionEndToEnd(t *testing.T) {
 
 	// Verify the repo URL is NOT a PR URL (no /pull/ in path)
 	// This confirms the handler will use repo URL as fallback, not a PR URL
-	if contains := bytes.Contains([]byte(repoURL), []byte("/pull/")); contains {
+	if contains := strings.Contains(repoURL, "/pull/"); contains {
 		t.Errorf("Repo URL should not contain /pull/, got %q", repoURL)
 	}
 }

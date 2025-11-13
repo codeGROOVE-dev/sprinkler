@@ -369,14 +369,14 @@ func TestAllFunctionsWithNilContext(t *testing.T) {
 	SetLogger(logger)
 
 	// Test Info with nil context
-	Info(nil, "info with nil context", Fields{"key": "value"})
+	Info(context.TODO(), "info with nil context", Fields{"key": "value"})
 	if !strings.Contains(buf.String(), "info with nil context") {
 		t.Error("Info did not handle nil context")
 	}
 
 	// Test Warn with nil context
 	buf.Reset()
-	Warn(nil, "warn with nil context", Fields{"key": "value"})
+	Warn(context.TODO(), "warn with nil context", Fields{"key": "value"})
 	if !strings.Contains(buf.String(), "warn with nil context") {
 		t.Error("Warn did not handle nil context")
 	}
@@ -384,13 +384,13 @@ func TestAllFunctionsWithNilContext(t *testing.T) {
 	// Test Error with nil context
 	buf.Reset()
 	err := errors.New("test error")
-	Error(nil, "error with nil context", err, Fields{"key": "value"})
+	Error(context.TODO(), "error with nil context", err, Fields{"key": "value"})
 	if !strings.Contains(buf.String(), "error with nil context") {
 		t.Error("Error did not handle nil context")
 	}
 
 	// Test Debug with nil context
 	buf.Reset()
-	Debug(nil, "debug with nil context", Fields{"key": "value"})
+	Debug(context.TODO(), "debug with nil context", Fields{"key": "value"})
 	// Debug is filtered by default, just ensure no panic
 }
