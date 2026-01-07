@@ -757,7 +757,7 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 						"type", event.Type,
 						"cache_hit", false)
 
-					gh := github.NewClient(c.config.Token)
+					gh := github.NewClient(c.config.Token, c.logger)
 					var err error
 					prs, err = gh.FindPRsForCommit(ctx, owner, repo, event.CommitSHA)
 					if err != nil {

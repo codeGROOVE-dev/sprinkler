@@ -386,46 +386,6 @@ func TestExtractCommitSHA(t *testing.T) {
 	}
 }
 
-// TestGetMapKeys tests the getMapKeys utility function.
-func TestGetMapKeys(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    map[string]any
-		expected int // Just check length since order is undefined
-	}{
-		{
-			name:     "empty map",
-			input:    map[string]any{},
-			expected: 0,
-		},
-		{
-			name: "single key",
-			input: map[string]any{
-				"key1": "value1",
-			},
-			expected: 1,
-		},
-		{
-			name: "multiple keys",
-			input: map[string]any{
-				"key1": "value1",
-				"key2": "value2",
-				"key3": "value3",
-			},
-			expected: 3,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := getMapKeys(tt.input)
-			if len(result) != tt.expected {
-				t.Errorf("getMapKeys() returned %d keys, want %d", len(result), tt.expected)
-			}
-		})
-	}
-}
-
 // TestWebhookHandlerNoPRURL tests events with no PR URL.
 func TestWebhookHandlerNoPRURL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

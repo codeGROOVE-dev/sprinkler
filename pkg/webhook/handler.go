@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -141,22 +140,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For check events, always log the full payload to help with debugging
-	if eventType == "check_run" || eventType == "check_suite" {
-		payloadJSON, err := json.Marshal(payload)
-		if err != nil {
-			logger.Warn(ctx, "failed to marshal check event payload", logger.Fields{
-				"event_type":  eventType,
-				"delivery_id": deliveryID,
-				"error":       err.Error(),
-			})
-		} else {
-			logger.Info(ctx, "received check event - full payload for debugging", logger.Fields{
-				"event_type":  eventType,
-				"delivery_id": deliveryID,
-				"payload":     string(payloadJSON),
-			})
-		}
+	// Extract commit SHA early for check/pull_request events (used for cache and event)
+	var commitSHA string
+	if eventType == "check_run" || eventType == "check_suite" || eventType == "pull_request" {
+		commitSHA = extractCommitSHA(eventType, payload)
 	}
 
 	// Extract PR URL
@@ -183,42 +170,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// For check events without PR URL, this is a known race condition
-		// GitHub webhooks can fire before the pull_requests array is populated
-		commitSHA := extractCommitSHA(eventType, payload)
-		// Extract repo URL as fallback for org-based matching
-		repoURL := ""
-		if repo, ok := payload["repository"].(map[string]any); ok {
-			if htmlURL, ok := repo["html_url"].(string); ok {
-				repoURL = htmlURL
+		// For check events without PR URL, try cache lookup first
+		if commitSHA != "" {
+			if prInfo, found := h.hub.CommitCache().Get(ctx, commitSHA); found {
+				prURL = prInfo.URL
+				logger.Info(ctx, "check event: PR found via cache", logger.Fields{
+					"event_type":  eventType,
+					"delivery_id": deliveryID,
+					"commit_sha":  truncateSHA(commitSHA),
+					"pr_url":      prURL,
+					"pr_number":   prInfo.Number,
+				})
 			}
 		}
 
-		// If we can't extract repo URL, drop the event
-		if repoURL == "" {
-			// Can't extract even repo URL - must drop the event
-			logger.Warn(ctx, "⛔ DROPPING CHECK EVENT - no PR URL or repo URL", logger.Fields{
+		// Fall back to repo URL if cache miss
+		if prURL == "" {
+			repoURL := extractRepoURL(payload)
+			if repoURL == "" {
+				logger.Warn(ctx, "check event: dropping - no repo URL", logger.Fields{
+					"event_type":  eventType,
+					"delivery_id": deliveryID,
+					"commit_sha":  commitSHA,
+				})
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			prURL = repoURL
+			logger.Info(ctx, "check event: using repo URL (cache miss)", logger.Fields{
 				"event_type":  eventType,
 				"delivery_id": deliveryID,
 				"commit_sha":  commitSHA,
-				"issue":       "cannot extract repository information from payload",
+				"repo_url":    repoURL,
 			})
-			w.WriteHeader(http.StatusOK)
-			return
 		}
-
-		// We can still broadcast using repo URL - org-based subscriptions will work
-		logger.Warn(ctx, "⚠️  CHECK EVENT RACE CONDITION DETECTED", logger.Fields{
-			"event_type":  eventType,
-			"delivery_id": deliveryID,
-			"commit_sha":  commitSHA,
-			"repo_url":    repoURL,
-			"issue":       "pull_requests array not yet populated by GitHub",
-			"workaround":  "broadcasting with repo URL for org-based subscriptions",
-		})
-
-		// Use repo URL as fallback - org subscriptions will still work
-		prURL = repoURL
 	}
 
 	// Create and broadcast event
@@ -227,13 +212,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Timestamp:  time.Now(),
 		Type:       eventType,
 		DeliveryID: deliveryID,
+		CommitSHA:  commitSHA,
 	}
 
-	// Extract commit SHA for cache population and PR lookup
-	// - pull_request: allows client-side cache population for commit->PR mapping
-	// - check events: enables PR lookup when URL is repo-only (GitHub race condition)
-	if eventType == "check_run" || eventType == "check_suite" || eventType == "pull_request" {
-		event.CommitSHA = extractCommitSHA(eventType, payload)
+	// For pull_request events, cache the commit SHA → PR URL mapping
+	// This enables reliable PR association for subsequent check events
+	if eventType == "pull_request" {
+		if commitSHA == "" {
+			logger.Warn(ctx, "pull_request event: no commit SHA extracted", logger.Fields{
+				"delivery_id": deliveryID,
+				"pr_url":      prURL,
+			})
+		} else if !strings.Contains(prURL, "/pull/") {
+			logger.Warn(ctx, "pull_request event: URL not a PR URL", logger.Fields{
+				"delivery_id": deliveryID,
+				"commit_sha":  truncateSHA(commitSHA),
+				"url":         prURL,
+			})
+		} else {
+			// Extract PR number inline (only used here)
+			var prNumber int
+			if pr, ok := payload["pull_request"].(map[string]any); ok {
+				if num, ok := pr["number"].(float64); ok {
+					prNumber = int(num)
+				}
+			}
+			h.hub.CommitCache().Set(ctx, commitSHA, srv.PRInfo{
+				URL:     prURL,
+				Number:  prNumber,
+				RepoURL: extractRepoURL(payload),
+			})
+		}
 	}
 
 	// Get client count before broadcasting (for debugging delivery issues)
@@ -246,25 +255,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error(ctx, "failed to write response", err, logger.Fields{"delivery_id": deliveryID})
 	}
 
-	// Log successful webhook processing with client count for debugging
+	// Log webhook processing result
 	logFields := logger.Fields{
 		"event_type":        eventType,
 		"delivery_id":       deliveryID,
 		"url":               prURL,
-		"remote_addr":       r.RemoteAddr,
-		"payload_size":      len(body),
 		"connected_clients": clientCount,
 	}
 
-	// Indicate if this is a repo URL fallback (check event race condition)
-	if (eventType == "check_run" || eventType == "check_suite") && !strings.Contains(prURL, "/pull/") {
-		logFields["url_type"] = "repository_fallback"
-		logFields["note"] = "using repo URL due to missing pull_requests array (GitHub timing issue)"
-	} else {
-		logFields["url_type"] = "pull_request"
+	// For check events, add context about PR association
+	if eventType == "check_run" || eventType == "check_suite" {
+		if strings.Contains(prURL, "/pull/") {
+			logFields["pr_associated"] = true
+		} else {
+			logFields["pr_associated"] = false
+			logFields["commit_sha"] = event.CommitSHA
+		}
 	}
 
-	logger.Info(ctx, "webhook processed successfully", logFields)
+	logger.Info(ctx, "webhook broadcast", logFields)
 }
 
 // VerifySignature validates the GitHub webhook signature.
@@ -306,108 +315,103 @@ func ExtractPRURL(ctx context.Context, eventType string, payload map[string]any)
 			}
 		}
 	case "check_run", "check_suite":
-		// Extract PR URLs from check events if available
+		// Extract PR URL from check events if available in pull_requests array
 		if checkRun, ok := payload["check_run"].(map[string]any); ok {
-			if url := extractPRFromCheckEvent(ctx, checkRun, payload, eventType); url != "" {
-				return url
+			result := extractCheckEventInfo(checkRun, payload)
+			if result.prURL != "" {
+				logger.Info(ctx, "check event: PR found in payload", logger.Fields{
+					"event_type": eventType,
+					"pr_url":     result.prURL,
+					"pr_number":  result.prNumber,
+					"pr_count":   result.prCount,
+					"source":     result.source,
+					"check_name": result.checkName,
+					"conclusion": result.conclusion,
+				})
+				return result.prURL
 			}
 		}
 		if checkSuite, ok := payload["check_suite"].(map[string]any); ok {
-			if url := extractPRFromCheckEvent(ctx, checkSuite, payload, eventType); url != "" {
-				return url
+			result := extractCheckEventInfo(checkSuite, payload)
+			if result.prURL != "" {
+				logger.Info(ctx, "check event: PR found in payload", logger.Fields{
+					"event_type": eventType,
+					"pr_url":     result.prURL,
+					"pr_number":  result.prNumber,
+					"pr_count":   result.prCount,
+					"source":     result.source,
+				})
+				return result.prURL
 			}
 		}
-		// Log when we can't extract PR URL from check event
-		payloadKeys := make([]string, 0, len(payload))
-		for k := range payload {
-			payloadKeys = append(payloadKeys, k)
-		}
-		logger.Warn(ctx, "no PR URL found in check event", logger.Fields{
-			"event_type":      eventType,
-			"has_check_run":   payload["check_run"] != nil,
-			"has_check_suite": payload["check_suite"] != nil,
-			"payload_keys":    payloadKeys,
-		})
+		// No PR URL in payload - will try cache lookup in caller
 	default:
 		// For other event types, no PR URL can be extracted
 	}
 	return ""
 }
 
-// extractPRFromCheckEvent extracts PR URL from check_run or check_suite events.
-func extractPRFromCheckEvent(ctx context.Context, checkEvent map[string]any, payload map[string]any, eventType string) string {
+// checkEventResult contains the result of extracting PR info from a check event.
+type checkEventResult struct {
+	prURL      string
+	prNumber   int
+	prCount    int    // Number of PRs in the pull_requests array
+	source     string // How the PR URL was found: "html_url", "constructed", or ""
+	commitSHA  string
+	checkName  string
+	conclusion string
+}
+
+// extractCheckEventInfo extracts PR and check info from check_run or check_suite events.
+func extractCheckEventInfo(checkEvent map[string]any, payload map[string]any) checkEventResult {
+	result := checkEventResult{}
+
+	// Extract check metadata
+	if name, ok := checkEvent["name"].(string); ok {
+		result.checkName = name
+	}
+	if conclusion, ok := checkEvent["conclusion"].(string); ok {
+		result.conclusion = conclusion
+	}
+	if sha, ok := checkEvent["head_sha"].(string); ok {
+		result.commitSHA = sha
+	}
+
+	// Check for pull_requests array
 	prs, ok := checkEvent["pull_requests"].([]any)
 	if !ok || len(prs) == 0 {
-		logger.Info(ctx, "check event has no pull_requests array", logger.Fields{
-			"event_type":       eventType,
-			"has_pr_array":     ok,
-			"pr_array_length":  len(prs),
-			"check_event_keys": getMapKeys(checkEvent),
-		})
-		return ""
+		return result
 	}
+	result.prCount = len(prs)
 
 	pr, ok := prs[0].(map[string]any)
 	if !ok {
-		logger.Warn(ctx, "pull_requests[0] is not a map", logger.Fields{
-			"event_type": eventType,
-			"pr_type":    fmt.Sprintf("%T", prs[0]),
-		})
-		return ""
+		return result
 	}
 
-	// Try html_url first
+	// Extract PR number
+	if num, ok := pr["number"].(float64); ok {
+		result.prNumber = int(num)
+	}
+
+	// Try html_url first (preferred)
 	if htmlURL, ok := pr["html_url"].(string); ok {
-		logger.Info(ctx, "extracted PR URL from check event html_url", logger.Fields{
-			"event_type": eventType,
-			"pr_url":     htmlURL,
-		})
-		return htmlURL
+		result.prURL = htmlURL
+		result.source = "html_url"
+		return result
 	}
 
-	// Fallback: construct from number
-	num, ok := pr["number"].(float64)
-	if !ok {
-		logger.Warn(ctx, "PR number not found in check event", logger.Fields{
-			"event_type": eventType,
-			"pr_keys":    getMapKeys(pr),
-		})
-		return ""
+	// Fallback: construct from number + repo URL
+	if result.prNumber > 0 {
+		if repo, ok := payload["repository"].(map[string]any); ok {
+			if repoURL, ok := repo["html_url"].(string); ok {
+				result.prURL = repoURL + "/pull/" + strconv.Itoa(result.prNumber)
+				result.source = "constructed"
+			}
+		}
 	}
 
-	repo, ok := payload["repository"].(map[string]any)
-	if !ok {
-		logger.Warn(ctx, "repository not found in payload", logger.Fields{
-			"event_type": eventType,
-		})
-		return ""
-	}
-
-	repoURL, ok := repo["html_url"].(string)
-	if !ok {
-		logger.Warn(ctx, "repository html_url not found", logger.Fields{
-			"event_type": eventType,
-			"repo_keys":  getMapKeys(repo),
-		})
-		return ""
-	}
-
-	constructedURL := repoURL + "/pull/" + strconv.Itoa(int(num))
-	logger.Info(ctx, "constructed PR URL from check event", logger.Fields{
-		"event_type": eventType,
-		"pr_url":     constructedURL,
-		"pr_number":  int(num),
-	})
-	return constructedURL
-}
-
-// getMapKeys returns the keys from a map for logging.
-func getMapKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
+	return result
 }
 
 // extractCommitSHA extracts the commit SHA from pull_request, check_run, or check_suite events.
@@ -438,3 +442,22 @@ func extractCommitSHA(eventType string, payload map[string]any) string {
 	}
 	return ""
 }
+
+// extractRepoURL extracts the repository HTML URL from the payload.
+func extractRepoURL(payload map[string]any) string {
+	if repo, ok := payload["repository"].(map[string]any); ok {
+		if htmlURL, ok := repo["html_url"].(string); ok {
+			return htmlURL
+		}
+	}
+	return ""
+}
+
+// truncateSHA returns the first 8 characters of a SHA for logging.
+func truncateSHA(sha string) string {
+	if len(sha) > 8 {
+		return sha[:8]
+	}
+	return sha
+}
+

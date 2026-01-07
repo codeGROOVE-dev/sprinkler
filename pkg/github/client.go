@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -23,16 +23,22 @@ const (
 // Client provides GitHub API functionality.
 type Client struct {
 	httpClient *http.Client
+	logger     *slog.Logger
 	token      string
 }
 
 // NewClient creates a new GitHub API client with the provided token.
-func NewClient(token string) *Client {
+// If logger is nil, a default discarding logger is used.
+func NewClient(token string, logger *slog.Logger) *Client {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Client{
 		httpClient: &http.Client{
 			Timeout: clientTimeout,
 		},
-		token: token,
+		token:  token,
+		logger: logger,
 	}
 }
 
@@ -71,12 +77,12 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
-				log.Printf("GitHub API request failed (will retry): %v", err)
+				c.logger.Warn("GitHub API request failed (will retry)", "error", err)
 				return err // Retry on network errors
 			}
 			defer func() {
 				if err := resp.Body.Close(); err != nil {
-					log.Printf("failed to close response body: %v", err)
+					c.logger.Warn("failed to close response body", "error", err)
 				}
 			}()
 
@@ -102,24 +108,24 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 
 			case http.StatusUnauthorized:
 				// Don't retry on auth failures
-				log.Print("GitHub API: 401 Unauthorized - invalid token for /user endpoint")
+				c.logger.Warn("GitHub API: 401 Unauthorized - invalid token for /user endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
 				// Check if rate limited
 				if resp.Header.Get("X-RateLimit-Remaining") == "0" { //nolint:canonicalheader // GitHub API header
 					resetTime := resp.Header.Get("X-RateLimit-Reset") //nolint:canonicalheader // GitHub API header
-					log.Printf("GitHub API: 403 Forbidden - rate limit exceeded for /user endpoint, reset at %s", resetTime)
+					c.logger.Warn("GitHub API: 403 Forbidden - rate limit exceeded for /user endpoint", "reset_at", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
-				log.Print("GitHub API: 403 Forbidden - access denied for /user endpoint")
+				c.logger.Warn("GitHub API: 403 Forbidden - access denied for /user endpoint")
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API server error %d (will retry)", resp.StatusCode)
+				c.logger.Warn("GitHub API server error (will retry)", "status", resp.StatusCode)
 				return lastErr
 
 			default:
@@ -164,12 +170,12 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
-				log.Printf("GitHub API: /installation/repositories request failed (will retry): %v", err)
+				c.logger.Warn("GitHub API: /installation/repositories request failed (will retry)", "error", err)
 				return err // Retry on network errors
 			}
 			defer func() {
 				if err := resp.Body.Close(); err != nil {
-					log.Printf("failed to close response body: %v", err)
+					c.logger.Warn("failed to close response body", "error", err)
 				}
 			}()
 
@@ -186,8 +192,8 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 				if len(bodySnippet) > 200 {
 					bodySnippet = bodySnippet[:200] + "..."
 				}
-				log.Printf("GitHub API DEBUG: /installation/repositories returned status=%d, body=%s",
-					resp.StatusCode, bodySnippet)
+				c.logger.Debug("GitHub API: /installation/repositories returned non-OK",
+					"status", resp.StatusCode, "body", bodySnippet)
 			}
 
 			// Handle status codes
@@ -234,7 +240,7 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API: /installation server error %d (will retry)", resp.StatusCode)
+				c.logger.Warn("GitHub API: /installation server error (will retry)", "status", resp.StatusCode)
 				return lastErr
 
 			default:
@@ -254,8 +260,8 @@ func (c *Client) AppInstallationInfo(ctx context.Context) (*AppInstallation, err
 		return nil, err
 	}
 
-	log.Printf("GitHub API: App installation detected - Account: %s (%s)",
-		installation.Account.Login, installation.Account.Type)
+	c.logger.Info("GitHub API: App installation detected",
+		"account", installation.Account.Login, "type", installation.Account.Type)
 	return installation, nil
 }
 
@@ -279,32 +285,32 @@ func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []strin
 		tokenType = "unknown"
 	}
 
-	log.Printf("GitHub API: Starting authentication (token_type=%s)", tokenType)
+	c.logger.Info("GitHub API: Starting authentication", "token_type", tokenType)
 
 	// First, try to detect if this is a GitHub App token by checking for /installation/repositories endpoint
 	// Try for all tokens, not just ghs_ prefix - let the API tell us what it is
-	log.Print("GitHub API: Checking if token works with /installation/repositories endpoint...")
+	c.logger.Debug("GitHub API: Checking if token works with /installation/repositories endpoint...")
 	installation, appErr := c.AppInstallationInfo(ctx)
 	if appErr == nil {
 		// This is a GitHub App - return the org it's installed in
 		if installation.Account.Type == "Organization" {
-			log.Printf("GitHub API: SUCCESS - App installation token authenticated for organization: %s", installation.Account.Login)
+			c.logger.Info("GitHub API: App installation token authenticated for organization", "org", installation.Account.Login)
 			return "app[installation]", []string{installation.Account.Login}, nil
 		}
 		// App installed on user account - treat the personal account as an "org" for subscription purposes
-		log.Printf("GitHub API: SUCCESS - App installation token authenticated for user account: %s", installation.Account.Login)
+		c.logger.Info("GitHub API: App installation token authenticated for user account", "account", installation.Account.Login)
 		return "app[installation]", []string{installation.Account.Login}, nil
 	}
-	log.Printf("GitHub API: Token did not work with /installation/repositories (error: %v), trying /user endpoint...", appErr)
+	c.logger.Debug("GitHub API: Token did not work with /installation/repositories, trying /user endpoint...", "error", appErr)
 
 	// Fall back to user authentication
-	log.Print("GitHub API: Getting authenticated user info...")
+	c.logger.Debug("GitHub API: Getting authenticated user info...")
 	user, err := c.AuthenticatedUser(ctx)
 	if err != nil {
-		log.Printf("GitHub API: Failed to get authenticated user: %v", err)
+		c.logger.Warn("GitHub API: Failed to get authenticated user", "error", err)
 		return "", nil, fmt.Errorf("failed to get authenticated user: %w", err)
 	}
-	log.Printf("GitHub API: Successfully authenticated as user '%s'", user.Login)
+	c.logger.Info("GitHub API: Successfully authenticated as user", "user", user.Login)
 
 	// Get user's organizations
 	orgList, err := c.userOrganizations(ctx)
@@ -318,7 +324,7 @@ func (c *Client) UserAndOrgs(ctx context.Context) (username string, orgs []strin
 		orgNames[i] = o.Login
 	}
 
-	log.Printf("GitHub API: User '%s' is member of %d organizations", user.Login, len(orgList))
+	c.logger.Info("GitHub API: User organizations loaded", "user", user.Login, "org_count", len(orgList))
 	return user.Login, orgNames, nil
 }
 
@@ -332,7 +338,7 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 	var orgs []Organization
 	var lastErr error
 
-	log.Print("GitHub API: Fetching user's organizations...")
+	c.logger.Debug("GitHub API: Fetching user's organizations...")
 
 	// Retry org membership check with exponential backoff
 	err := retry.Do(
@@ -349,12 +355,12 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
-				log.Printf("GitHub API org fetch failed (will retry): %v", err)
+				c.logger.Warn("GitHub API org fetch failed (will retry)", "error", err)
 				return err // Retry on network errors
 			}
 			defer func() {
 				if err := resp.Body.Close(); err != nil {
-					log.Printf("failed to close response body: %v", err)
+					c.logger.Warn("failed to close response body", "error", err)
 				}
 			}()
 
@@ -373,24 +379,24 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 				return nil
 
 			case http.StatusUnauthorized:
-				log.Print("GitHub API: 401 Unauthorized - invalid token for /user/orgs endpoint")
+				c.logger.Warn("GitHub API: 401 Unauthorized - invalid token for /user/orgs endpoint")
 				return retry.Unrecoverable(errors.New("invalid GitHub token"))
 
 			case http.StatusForbidden:
 				// Check if it's a rate limit issue
 				if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
 					resetTime := resp.Header.Get("X-Ratelimit-Reset")
-					log.Printf("GitHub API: 403 Forbidden - rate limit exceeded for /user/orgs endpoint, reset at %s", resetTime)
+					c.logger.Warn("GitHub API: 403 Forbidden - rate limit exceeded for /user/orgs endpoint", "reset_at", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff
 				}
-				log.Print("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint")
+				c.logger.Warn("GitHub API: 403 Forbidden - access denied for /user/orgs endpoint")
 				return retry.Unrecoverable(errors.New("access forbidden"))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API server error %d (will retry)", resp.StatusCode)
+				c.logger.Warn("GitHub API server error (will retry)", "status", resp.StatusCode)
 				return lastErr
 
 			default:
@@ -415,7 +421,7 @@ func (c *Client) userOrganizations(ctx context.Context) ([]Organization, error) 
 // ValidateOrgMembership checks if the authenticated user has access to the specified organization.
 // Returns the authenticated user's username, list of all their organizations, and nil error if successful.
 func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (username string, orgs []string, err error) {
-	log.Printf("GitHub API: Starting authentication and org membership validation for org '%s'", org)
+	c.logger.Debug("GitHub API: Starting authentication and org membership validation", "org", org)
 
 	// Sanitize org name
 	org = strings.TrimSpace(org)
@@ -439,15 +445,13 @@ func (c *Client) ValidateOrgMembership(ctx context.Context, org string) (usernam
 	// Check if the requested organization is in the user's membership list
 	for _, userOrg := range orgNames {
 		if strings.EqualFold(userOrg, org) {
-			log.Printf("GitHub API: User '%s' is a member of organization '%s'", username, org)
-			log.Printf("GitHub API: User is member of %d total organizations", len(orgNames))
+			c.logger.Info("GitHub API: User is a member of organization", "user", username, "org", org, "total_orgs", len(orgNames))
 			return username, orgNames, nil
 		}
 	}
 
 	// User is not a member of the requested organization
-	log.Printf("GitHub API: User '%s' is NOT a member of organization '%s'", username, org)
-	log.Printf("GitHub API: User is member of %d organizations: %v", len(orgNames), orgNames)
+	c.logger.Warn("GitHub API: User is NOT a member of organization", "user", username, "org", org, "member_orgs", orgNames)
 	return username, orgNames, errors.New("user is not a member of the requested organization")
 }
 
@@ -467,7 +471,7 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 	// Use GitHub's API to list PRs associated with a commit
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/pulls", owner, repo, commitSHA)
 
-	log.Printf("GitHub API: Looking up PRs for commit %s in %s/%s", commitSHA[:8], owner, repo)
+	c.logger.Debug("GitHub API: Looking up PRs for commit", "commit", commitSHA[:8], "owner", owner, "repo", repo)
 
 	err := retry.Do(
 		func() error {
@@ -481,16 +485,16 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 			req.Header.Set("Accept", "application/vnd.github.v3+json")
 			req.Header.Set("User-Agent", "webhook-sprinkler/1.0")
 
-			log.Printf("GitHub API: GET %s (attempt %d)", url, attemptNum)
+			c.logger.Debug("GitHub API: GET", "url", url, "attempt", attemptNum)
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("failed to make request: %w", err)
-				log.Printf("GitHub API request failed (will retry): %v", err)
+				c.logger.Warn("GitHub API request failed (will retry)", "error", err)
 				return err // Retry on network errors
 			}
 			defer func() {
 				if err := resp.Body.Close(); err != nil {
-					log.Printf("failed to close response body: %v", err)
+					c.logger.Warn("failed to close response body", "error", err)
 				}
 			}()
 
@@ -517,45 +521,50 @@ func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, commitSHA st
 					prNumbers[i] = pr.Number
 				}
 
-				// If empty on first attempt, retry once after short delay
-				// This handles GitHub's indexing race condition
-				if len(prNumbers) == 0 && attemptNum == 1 {
-					log.Printf("GitHub API: Empty result on first attempt for commit %s - will retry once (race condition?)", commitSHA[:8])
-					time.Sleep(500 * time.Millisecond)
-					return errors.New("empty result on first attempt, retrying")
-				}
-
+				// Handle empty results with progressive backoff
+				// GitHub's indexing can take a moment after PR events
 				if len(prNumbers) == 0 {
-					log.Printf("GitHub API: Empty result for commit %s after %d attempts - "+
-						"may be push to main or PR not yet indexed", commitSHA[:8], attemptNum)
+					switch attemptNum {
+					case 1:
+						c.logger.Info("GitHub API: Empty result on attempt 1 - retrying after 500ms", "commit", commitSHA[:8])
+						time.Sleep(500 * time.Millisecond)
+						return errors.New("empty result, retrying")
+					case 2:
+						c.logger.Info("GitHub API: Empty result on attempt 2 - retrying after 1s", "commit", commitSHA[:8])
+						time.Sleep(1 * time.Second)
+						return errors.New("empty result, retrying")
+					default:
+						c.logger.Info("GitHub API: Empty result after retries - may be push to main or PR not yet indexed",
+							"commit", commitSHA[:8], "attempts", attemptNum)
+					}
 				} else {
-					log.Printf("GitHub API: Found %d PR(s) for commit %s: %v", len(prNumbers), commitSHA[:8], prNumbers)
+					c.logger.Info("GitHub API: Found PRs for commit", "count", len(prNumbers), "commit", commitSHA[:8], "prs", prNumbers)
 				}
 				return nil
 
 			case http.StatusNotFound:
 				// Commit not found - could be a commit to main or repo doesn't exist
-				log.Printf("GitHub API: Commit %s not found (404) - may not exist or indexing delayed", commitSHA[:8])
+				c.logger.Debug("GitHub API: Commit not found (404) - may not exist or indexing delayed", "commit", commitSHA[:8])
 				return retry.Unrecoverable(fmt.Errorf("commit not found: %s", commitSHA))
 
 			case http.StatusUnauthorized, http.StatusForbidden:
 				// Don't retry on auth errors
-				log.Printf("GitHub API: Auth failed (%d) for commit %s", resp.StatusCode, commitSHA[:8])
+				c.logger.Warn("GitHub API: Auth failed for commit", "status", resp.StatusCode, "commit", commitSHA[:8])
 				return retry.Unrecoverable(fmt.Errorf("authentication failed: status %d", resp.StatusCode))
 
 			case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 				// Retry on server errors
 				lastErr = fmt.Errorf("GitHub API server error: %d", resp.StatusCode)
-				log.Printf("GitHub API: Server error %d for commit %s (will retry)", resp.StatusCode, commitSHA[:8])
+				c.logger.Warn("GitHub API: Server error for commit (will retry)", "status", resp.StatusCode, "commit", commitSHA[:8])
 				return lastErr
 
 			default:
 				// Don't retry on other errors
-				log.Printf("GitHub API: Unexpected status %d for commit %s: %s", resp.StatusCode, commitSHA[:8], string(body))
+				c.logger.Warn("GitHub API: Unexpected status for commit", "status", resp.StatusCode, "commit", commitSHA[:8], "body", string(body))
 				return retry.Unrecoverable(fmt.Errorf("unexpected status: %d, body: %s", resp.StatusCode, string(body)))
 			}
 		},
-		retry.Attempts(3),
+		retry.Attempts(4),
 		retry.DelayType(retry.FullJitterBackoffDelay),
 		retry.MaxDelay(2*time.Minute),
 		retry.Context(ctx),

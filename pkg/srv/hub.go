@@ -51,6 +51,7 @@ type Hub struct {
 	stopped               chan struct{}
 	mu                    sync.RWMutex
 	periodicCheckInterval time.Duration // For testing; 0 means use default (1 minute)
+	commitCache           *CommitCache  // Maps commit SHA → PR info for check event association
 }
 
 // broadcastMsg contains an event and the payload for matching.
@@ -69,12 +70,13 @@ const (
 // NewHub creates a new client hub.
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[string]*Client),
-		register:   make(chan *Client, registerBufferSize),       // Buffer to prevent blocking
-		unregister: make(chan string, unregisterBufferSize),      // Buffer to prevent blocking
-		broadcast:  make(chan broadcastMsg, broadcastBufferSize), // Limited buffer to prevent memory exhaustion
-		stop:       make(chan struct{}),
-		stopped:    make(chan struct{}),
+		clients:     make(map[string]*Client),
+		register:    make(chan *Client, registerBufferSize),       // Buffer to prevent blocking
+		unregister:  make(chan string, unregisterBufferSize),      // Buffer to prevent blocking
+		broadcast:   make(chan broadcastMsg, broadcastBufferSize), // Limited buffer to prevent memory exhaustion
+		stop:        make(chan struct{}),
+		stopped:     make(chan struct{}),
+		commitCache: NewCommitCache(),
 	}
 }
 
@@ -245,6 +247,11 @@ func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// CommitCache returns the hub's commit→PR cache for populating from webhook events.
+func (h *Hub) CommitCache() *CommitCache {
+	return h.commitCache
 }
 
 // trySendEvent attempts to send an event to a client's send channel.

@@ -392,7 +392,7 @@ func (h *WebSocketHandler) validateAuth(ctx context.Context, ws *websocket.Conn,
 	if h.githubClientFactory != nil {
 		ghClient = h.githubClientFactory(githubToken)
 	} else {
-		ghClient = github.NewClient(githubToken)
+		ghClient = github.NewClient(githubToken, nil)
 	}
 
 	if sub.Organization != "" {
