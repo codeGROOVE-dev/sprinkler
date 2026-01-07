@@ -113,8 +113,8 @@ func (c *Client) AuthenticatedUser(ctx context.Context) (*User, error) {
 
 			case http.StatusForbidden:
 				// Check if rate limited
-				if resp.Header.Get("X-RateLimit-Remaining") == "0" { //nolint:canonicalheader // GitHub API header
-					resetTime := resp.Header.Get("X-RateLimit-Reset") //nolint:canonicalheader // GitHub API header
+				if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
+					resetTime := resp.Header.Get("X-Ratelimit-Reset")
 					c.logger.Warn("GitHub API: 403 Forbidden - rate limit exceeded for /user endpoint", "reset_at", resetTime)
 					lastErr = errors.New("GitHub API rate limit exceeded")
 					return lastErr // Retry after backoff

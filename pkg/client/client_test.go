@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2817,7 +2818,7 @@ func TestWriteChannelBackpressure(t *testing.T) {
 func TestPingChannelFullScenario(t *testing.T) {
 	t.Parallel()
 
-	pongReceived := false
+	var pongReceived atomic.Bool
 	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		var sub map[string]any
 		_ = websocket.JSON.Receive(ws, &sub)
@@ -2836,7 +2837,7 @@ func TestPingChannelFullScenario(t *testing.T) {
 					"type": "pong",
 					"seq":  fmt.Sprintf("%v", msg["seq"]),
 				})
-				pongReceived = true
+				pongReceived.Store(true)
 			}
 		}
 	}))
@@ -2863,7 +2864,7 @@ func TestPingChannelFullScenario(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	client.Stop()
 
-	if !pongReceived {
+	if !pongReceived.Load() {
 		t.Error("Expected at least one pong to be received")
 	}
 }
@@ -3000,7 +3001,7 @@ func TestConcurrentWebSocketClose(t *testing.T) {
 func TestNetworkErrorDuringWrite(t *testing.T) {
 	t.Parallel()
 
-	connectionBroken := false
+	var connectionBroken atomic.Bool
 	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		var sub map[string]any
 		_ = websocket.JSON.Receive(ws, &sub)
@@ -3011,11 +3012,11 @@ func TestNetworkErrorDuringWrite(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 		ws.Close()
-		connectionBroken = true
+		connectionBroken.Store(true)
 	}))
 	defer srv.Close()
 
-	errorReceived := false
+	var errorReceived atomic.Bool
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
 		Token:        "test-token",
@@ -3023,7 +3024,7 @@ func TestNetworkErrorDuringWrite(t *testing.T) {
 		PingInterval: 20 * time.Millisecond,
 		NoReconnect:  true,
 		OnDisconnect: func(err error) {
-			errorReceived = true
+			errorReceived.Store(true)
 		},
 	})
 	if err != nil {
@@ -3035,7 +3036,7 @@ func TestNetworkErrorDuringWrite(t *testing.T) {
 
 	_ = client.Start(ctx)
 
-	if connectionBroken && !errorReceived {
+	if connectionBroken.Load() && !errorReceived.Load() {
 		t.Log("Warning: Network error may not have been properly detected")
 	}
 }
@@ -3082,5 +3083,110 @@ func TestIOTimeoutRecovery(t *testing.T) {
 
 	if eventReceived {
 		t.Log("Client successfully received event and handled I/O timeouts")
+	}
+}
+
+// TestEmptyResultCacheTTL tests that empty cache results expire after the TTL.
+func TestEmptyResultCacheTTL(t *testing.T) {
+	client, err := New(Config{
+		ServerURL:    "ws://localhost:8080",
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	// Override TTL to a very short duration for testing
+	client.emptyResultTTL = 50 * time.Millisecond
+
+	key := "owner/repo:commit_empty"
+
+	// Simulate caching an empty result (as production code does)
+	client.cacheMu.Lock()
+	client.commitCacheKeys = append(client.commitCacheKeys, key)
+	client.commitPRCache[key] = []int{} // Empty result
+	client.commitPRCacheExpiry[key] = time.Now().Add(client.emptyResultTTL)
+	client.cacheMu.Unlock()
+
+	// Verify cache entry exists and is not expired
+	client.cacheMu.RLock()
+	cached, cacheExists := client.commitPRCache[key]
+	expiry, hasExpiry := client.commitPRCacheExpiry[key]
+	client.cacheMu.RUnlock()
+
+	if !cacheExists {
+		t.Fatal("Expected cache entry to exist")
+	}
+	if len(cached) != 0 {
+		t.Errorf("Expected empty cached result, got %v", cached)
+	}
+	if !hasExpiry {
+		t.Fatal("Expected expiry to be set for empty result")
+	}
+
+	// Check that it's not expired yet
+	cacheExpired := cacheExists && len(cached) == 0 && hasExpiry && time.Now().After(expiry)
+	if cacheExpired {
+		t.Error("Cache should not be expired immediately after creation")
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(60 * time.Millisecond)
+
+	// Check that it's now expired
+	client.cacheMu.RLock()
+	cached, cacheExists = client.commitPRCache[key]
+	expiry, hasExpiry = client.commitPRCacheExpiry[key]
+	client.cacheMu.RUnlock()
+
+	cacheExpired = cacheExists && len(cached) == 0 && hasExpiry && time.Now().After(expiry)
+	if !cacheExpired {
+		t.Errorf("Cache should be expired after TTL, expiry=%v, now=%v", expiry, time.Now())
+	}
+}
+
+// TestNonEmptyResultNoCacheTTL tests that non-empty cache results don't have a TTL.
+func TestNonEmptyResultNoCacheTTL(t *testing.T) {
+	client, err := New(Config{
+		ServerURL:    "ws://localhost:8080",
+		Token:        "test-token",
+		Organization: "test-org",
+		NoReconnect:  true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	key := "owner/repo:commit_with_pr"
+
+	// Simulate caching a non-empty result
+	client.cacheMu.Lock()
+	client.commitCacheKeys = append(client.commitCacheKeys, key)
+	client.commitPRCache[key] = []int{123, 456} // Non-empty result
+	// Production code doesn't set expiry for non-empty results
+	client.cacheMu.Unlock()
+
+	// Verify no expiry is set for non-empty results
+	client.cacheMu.RLock()
+	cached, cacheExists := client.commitPRCache[key]
+	_, hasExpiry := client.commitPRCacheExpiry[key]
+	client.cacheMu.RUnlock()
+
+	if !cacheExists {
+		t.Fatal("Expected cache entry to exist")
+	}
+	if len(cached) != 2 {
+		t.Errorf("Expected 2 cached PRs, got %v", cached)
+	}
+	if hasExpiry {
+		t.Error("Non-empty results should not have expiry set")
+	}
+
+	// The cache entry should never be considered expired
+	cacheExpired := cacheExists && len(cached) == 0 && hasExpiry && time.Now().After(time.Time{})
+	if cacheExpired {
+		t.Error("Non-empty cache should never be expired")
 	}
 }

@@ -58,12 +58,12 @@ func (s *Subscription) Validate() error {
 	if len(s.EventTypes) > maxEventTypeCount {
 		return errors.New("too many event types specified")
 	}
-	for _, eventType := range s.EventTypes {
-		if len(eventType) > maxEventTypeLength || eventType == "" {
+	for _, et := range s.EventTypes {
+		if len(et) > maxEventTypeLength || et == "" {
 			return errors.New("invalid event type")
 		}
 		// GitHub event types typically use underscores and lowercase
-		for _, c := range eventType {
+		for _, c := range et {
 			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 				return errors.New("invalid event type format")
 			}
@@ -77,29 +77,29 @@ func (s *Subscription) Validate() error {
 		}
 
 		// Validate each PR URL
-		for _, prURL := range s.PullRequests {
-			if prURL == "" {
+		for _, u := range s.PullRequests {
+			if u == "" {
 				return errors.New("empty PR URL")
 			}
 
 			// Limit URL length to prevent memory exhaustion
-			if len(prURL) > maxPRURLLength {
+			if len(u) > maxPRURLLength {
 				return errors.New("PR URL too long")
 			}
 
 			// Basic validation - should be a GitHub PR URL
 			// Format: https://github.com/owner/repo/pull/number
-			if !strings.HasPrefix(prURL, "https://github.com/") {
+			if !strings.HasPrefix(u, "https://github.com/") {
 				return errors.New("invalid PR URL format")
 			}
 
 			// Check if it contains /pull/
-			if !strings.Contains(prURL, "/pull/") {
+			if !strings.Contains(u, "/pull/") {
 				return errors.New("URL must be a pull request URL")
 			}
 
 			// Validate the URL can be parsed to prevent injection
-			info, err := parsePRUrl(prURL)
+			info, err := parsePRUrl(u)
 			if err != nil {
 				return errors.New("invalid PR URL structure")
 			}

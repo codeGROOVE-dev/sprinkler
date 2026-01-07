@@ -106,8 +106,8 @@ func TestAuthenticatedUser_RateLimit(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		w.Header().Set("X-RateLimit-Remaining", "0")      //nolint:canonicalheader // GitHub API header
-		w.Header().Set("X-RateLimit-Reset", "1234567890") //nolint:canonicalheader // GitHub API header
+		w.Header().Set("X-Ratelimit-Remaining", "0")
+		w.Header().Set("X-Ratelimit-Reset", "1234567890")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
 	}))
@@ -901,7 +901,6 @@ func TestMockClient(t *testing.T) {
 
 		ctx := context.Background()
 		username, orgs, err := mock.UserAndOrgs(ctx)
-
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -943,7 +942,6 @@ func TestMockClient(t *testing.T) {
 
 		ctx := context.Background()
 		username, orgs, err := mock.ValidateOrgMembership(ctx, "org1")
-
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

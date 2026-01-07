@@ -42,6 +42,8 @@ type Event struct {
 //   - Non-blocking send to client.send channel prevents deadlocks
 //   - If client disconnects during iteration, send fails gracefully (channel full or closed)
 //   - Client.Close() is safe to call multiple times during this window
+//
+//nolint:govet // Field order optimized for readability over memory padding
 type Hub struct {
 	clients               map[string]*Client
 	register              chan *Client

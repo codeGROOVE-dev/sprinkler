@@ -735,11 +735,15 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 
 				// Check cache first
 				c.cacheMu.RLock()
-				cached, ok := c.commitPRCache[key]
+				cached, cacheExists := c.commitPRCache[key]
+				expiry, hasExpiry := c.commitPRCacheExpiry[key]
 				c.cacheMu.RUnlock()
 
+				// Check if cached empty result has expired (need to re-query GitHub)
+				cacheExpired := cacheExists && len(cached) == 0 && hasExpiry && time.Now().After(expiry)
+
 				var prs []int
-				if ok {
+				if cacheExists && !cacheExpired {
 					// Cache hit - return copy to prevent external modifications
 					prs = make([]int, len(cached))
 					copy(prs, cached)
@@ -750,7 +754,13 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 						"pr_count", len(prs),
 						"cache_hit", true)
 				} else {
-					// Cache miss - look up via GitHub API
+					// Cache miss or expired empty result - look up via GitHub API
+					if cacheExpired {
+						c.logger.Info("Cached empty result expired - retrying GitHub API",
+							"commit_sha", event.CommitSHA,
+							"repo_url", event.URL,
+							"type", event.Type)
+					}
 					c.logger.Info("Check event with repo URL - looking up PRs via GitHub API",
 						"commit_sha", event.CommitSHA,
 						"repo_url", event.URL,
@@ -776,14 +786,27 @@ func (c *Client) readEvents(ctx context.Context, ws *websocket.Conn) error {
 							c.commitCacheKeys = append(c.commitCacheKeys, key)
 						}
 						// Store copy to prevent external modifications
-						cached := make([]int, len(prs))
-						copy(cached, prs)
-						c.commitPRCache[key] = cached
+						cachedPRs := make([]int, len(prs))
+						copy(cachedPRs, prs)
+						c.commitPRCache[key] = cachedPRs
+						// Set TTL for empty results so we retry after indexing delay
+						if len(prs) == 0 {
+							c.commitPRCacheExpiry[key] = time.Now().Add(c.emptyResultTTL)
+						} else {
+							// Remove any expiry for non-empty results (cache permanently until evicted)
+							delete(c.commitPRCacheExpiry, key)
+						}
 						c.cacheMu.Unlock()
 
-						c.logger.Info("Cached PR lookup result",
-							"commit_sha", event.CommitSHA,
-							"pr_count", len(prs))
+						if len(prs) == 0 {
+							c.logger.Info("Cached empty PR lookup result with TTL",
+								"commit_sha", event.CommitSHA,
+								"ttl_seconds", int(c.emptyResultTTL.Seconds()))
+						} else {
+							c.logger.Info("Cached PR lookup result",
+								"commit_sha", event.CommitSHA,
+								"pr_count", len(prs))
+						}
 					}
 				}
 

@@ -1,5 +1,3 @@
-// Package srv provides a WebSocket hub for managing client connections and broadcasting
-// GitHub webhook events to subscribed clients based on their subscription criteria.
 package srv
 
 import (
@@ -21,11 +19,13 @@ const (
 )
 
 // PRInfo contains cached information about a pull request.
+//
+//nolint:govet // Field order optimized for readability over memory padding
 type PRInfo struct {
 	URL      string // Full PR URL (e.g., https://github.com/owner/repo/pull/123)
-	Number   int    // PR number
 	RepoURL  string // Repository URL (e.g., https://github.com/owner/repo)
 	CachedAt time.Time
+	Number   int // PR number
 }
 
 // CommitCache maps commit SHAs to their associated pull requests.

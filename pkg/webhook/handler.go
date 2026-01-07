@@ -218,18 +218,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// For pull_request events, cache the commit SHA → PR URL mapping
 	// This enables reliable PR association for subsequent check events
 	if eventType == "pull_request" {
-		if commitSHA == "" {
+		switch {
+		case commitSHA == "":
 			logger.Warn(ctx, "pull_request event: no commit SHA extracted", logger.Fields{
 				"delivery_id": deliveryID,
 				"pr_url":      prURL,
 			})
-		} else if !strings.Contains(prURL, "/pull/") {
+		case !strings.Contains(prURL, "/pull/"):
 			logger.Warn(ctx, "pull_request event: URL not a PR URL", logger.Fields{
 				"delivery_id": deliveryID,
 				"commit_sha":  truncateSHA(commitSHA),
 				"url":         prURL,
 			})
-		} else {
+		default:
 			// Extract PR number inline (only used here)
 			var prNumber int
 			if pr, ok := payload["pull_request"].(map[string]any); ok {
@@ -354,12 +355,12 @@ func ExtractPRURL(ctx context.Context, eventType string, payload map[string]any)
 // checkEventResult contains the result of extracting PR info from a check event.
 type checkEventResult struct {
 	prURL      string
-	prNumber   int
-	prCount    int    // Number of PRs in the pull_requests array
 	source     string // How the PR URL was found: "html_url", "constructed", or ""
 	commitSHA  string
 	checkName  string
 	conclusion string
+	prNumber   int
+	prCount    int // Number of PRs in the pull_requests array
 }
 
 // extractCheckEventInfo extracts PR and check info from check_run or check_suite events.
@@ -460,4 +461,3 @@ func truncateSHA(sha string) string {
 	}
 	return sha
 }
-

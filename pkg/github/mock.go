@@ -3,9 +3,11 @@ package github
 import (
 	"context"
 	"errors"
+	"sync"
 )
 
 // MockClient is a mock GitHub API client for testing.
+// Thread-safe for concurrent access.
 type MockClient struct {
 	Err                        error
 	Username                   string
@@ -13,10 +15,13 @@ type MockClient struct {
 	Orgs                       []string
 	UserAndOrgsCalls           int
 	ValidateOrgMembershipCalls int
+	mu                         sync.Mutex
 }
 
 // UserAndOrgs returns the mock user info.
-func (m *MockClient) UserAndOrgs(ctx context.Context) (username string, orgs []string, err error) {
+func (m *MockClient) UserAndOrgs(_ context.Context) (username string, orgs []string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.UserAndOrgsCalls++
 	if m.Err != nil {
 		return "", nil, m.Err
@@ -25,7 +30,9 @@ func (m *MockClient) UserAndOrgs(ctx context.Context) (username string, orgs []s
 }
 
 // ValidateOrgMembership validates organization membership using the mock data.
-func (m *MockClient) ValidateOrgMembership(ctx context.Context, org string) (username string, orgs []string, err error) {
+func (m *MockClient) ValidateOrgMembership(_ context.Context, org string) (username string, orgs []string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.ValidateOrgMembershipCalls++
 	m.LastValidatedOrg = org
 
