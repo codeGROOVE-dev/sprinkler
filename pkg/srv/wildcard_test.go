@@ -180,9 +180,9 @@ func TestWildcardOrganizationSubscription(t *testing.T) {
 				Type: tt.eventType,
 			}
 
-			result := matches(tt.subscription, event, tt.payload, tt.userOrgs)
+			result := matchesForTest(tt.subscription, event, tt.payload, tt.userOrgs)
 			if result != tt.shouldMatch {
-				t.Errorf("matches() = %v, want %v", result, tt.shouldMatch)
+				t.Errorf("matchesForTest() = %v, want %v", result, tt.shouldMatch)
 			}
 		})
 	}

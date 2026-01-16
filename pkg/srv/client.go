@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	"github.com/codeGROOVE-dev/sprinkler/pkg/github"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
 )
 
@@ -52,12 +53,13 @@ type Client struct {
 	userOrgs     map[string]bool
 	ID           string
 	subscription Subscription
+	tier         github.Tier // GitHub Marketplace tier
 	closeOnce    sync.Once
 	closed       uint32 // Atomic flag: 1 if closed, 0 if open
 }
 
 // NewClient creates a new client.
-func NewClient(ctx context.Context, id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string) *Client {
+func NewClient(ctx context.Context, id string, sub Subscription, conn *websocket.Conn, hub *Hub, userOrgs []string, tier github.Tier) *Client {
 	// Limit the number of orgs to prevent memory exhaustion
 	const maxOrgs = 1000
 	orgsToProcess := userOrgs
@@ -85,6 +87,7 @@ func NewClient(ctx context.Context, id string, sub Subscription, conn *websocket
 		hub:          hub,
 		done:         make(chan struct{}),
 		userOrgs:     orgsMap,
+		tier:         tier,
 	}
 }
 
@@ -196,4 +199,10 @@ func (c *Client) Close() {
 // Safe to call from any goroutine.
 func (c *Client) IsClosed() bool {
 	return atomic.LoadUint32(&c.closed) != 0
+}
+
+// CanAccessPrivateRepos returns true if the client's tier allows private repo access.
+// Only Pro and Flock tiers have access to private repository events.
+func (c *Client) CanAccessPrivateRepos() bool {
+	return c.tier == github.TierPro || c.tier == github.TierFlock
 }

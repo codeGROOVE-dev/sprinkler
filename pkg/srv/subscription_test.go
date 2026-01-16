@@ -435,9 +435,9 @@ func TestMatches(t *testing.T) {
 					tt.userOrgs[strings.ToLower(tt.sub.Organization)] = true
 				}
 			}
-			got := matches(tt.sub, tt.event, tt.payload, tt.userOrgs)
+			got := matchesForTest(tt.sub, tt.event, tt.payload, tt.userOrgs)
 			if got != tt.want {
-				t.Errorf("matches() = %v, want %v", got, tt.want)
+				t.Errorf("matchesForTest() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -765,9 +765,9 @@ func TestMatchesUserEventsOnlyEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matches(tt.sub, tt.event, tt.payload, tt.userOrgs)
+			got := matchesForTest(tt.sub, tt.event, tt.payload, tt.userOrgs)
 			if got != tt.want {
-				t.Errorf("matches() = %v, want %v", got, tt.want)
+				t.Errorf("matchesForTest() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -945,7 +945,7 @@ func TestMatchesUserEventsOnlyWithSpecificOrg(t *testing.T) {
 		},
 	}
 
-	got := matches(sub, event, payload, nil)
+	got := matchesForTest(sub, event, payload, nil)
 	if got {
 		t.Error("Should not match event in different org")
 	}
@@ -956,7 +956,7 @@ func TestMatchesUserEventsOnlyWithSpecificOrg(t *testing.T) {
 			"login": "myorg",
 		},
 	}
-	got = matches(sub, event, payload, nil)
+	got = matchesForTest(sub, event, payload, nil)
 	if !got {
 		t.Error("Should match event in correct org")
 	}

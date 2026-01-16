@@ -13,8 +13,10 @@ type MockClient struct {
 	Username                   string
 	LastValidatedOrg           string
 	Orgs                       []string
+	Tier                       Tier // Mock tier to return
 	UserAndOrgsCalls           int
 	ValidateOrgMembershipCalls int
+	UserTierCalls              int
 	mu                         sync.Mutex
 }
 
@@ -55,6 +57,21 @@ func (m *MockClient) ValidateOrgMembership(_ context.Context, org string) (usern
 	}
 
 	return m.Username, m.Orgs, nil
+}
+
+// UserTier returns the mock tier.
+func (m *MockClient) UserTier(_ context.Context, _ string) (Tier, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.UserTierCalls++
+	if m.Err != nil {
+		return TierFree, m.Err
+	}
+	// If no tier is set, default to TierFree
+	if m.Tier == "" {
+		return TierFree, nil
+	}
+	return m.Tier, nil
 }
 
 // Ensure MockClient implements APIClient interface.

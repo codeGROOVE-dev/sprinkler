@@ -11,11 +11,11 @@ func TestHub(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 
 	// Test registering clients - properly initialize using NewClient
-	client1 := NewClient(
+	client1 := NewClientForTest(
 		ctx,
 		"client1",
 		Subscription{Organization: "myorg", UserEventsOnly: true, Username: "alice"},
@@ -24,7 +24,7 @@ func TestHub(t *testing.T) {
 		[]string{"myorg"}, // User's organizations
 	)
 
-	client2 := NewClient(
+	client2 := NewClientForTest(
 		ctx,
 		"client2",
 		Subscription{Organization: "myorg"},
@@ -107,7 +107,7 @@ func TestHubUnregisterNonExistent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -123,12 +123,12 @@ func TestHubUnregisterNonExistent(t *testing.T) {
 // TestHubBroadcastWithNoMatches tests broadcasting when no clients match.
 func TestHubBroadcastWithNoMatches(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
 	// Create a mock client with a specific organization
-	client := NewClient(
+	client := NewClientForTest(
 		ctx,
 		"test-client",
 		Subscription{Organization: "org-a"},
@@ -174,12 +174,12 @@ func TestHubBroadcastWithNoMatches(t *testing.T) {
 // TestHubTrySendEventPanicRecovery tests panic recovery in trySendEvent.
 func TestHubTrySendEventPanicRecovery(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
 	// Create a client
-	client := NewClient(
+	client := NewClientForTest(
 		ctx,
 		"test-client",
 		Subscription{Organization: "test-org"},
@@ -221,7 +221,7 @@ func TestHubBroadcastContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(context.Background()) // Run with non-cancelled context
 	defer hub.Stop()
 
@@ -239,7 +239,7 @@ func TestHubBroadcastContextCancellation(t *testing.T) {
 
 // TestHubStopTwice tests calling Stop() multiple times.
 func TestHubStopTwice(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(context.Background())
 
 	// Stop once
@@ -255,7 +255,7 @@ func TestHubStopTwice(t *testing.T) {
 // TestHubBroadcastChannelFull tests broadcast when channel is at capacity.
 func TestHubBroadcastChannelFull(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 
 	// Do NOT start hub.Run() - this prevents the channel from being drained
 
@@ -280,13 +280,13 @@ func TestHubBroadcastChannelFull(t *testing.T) {
 // TestClientSendChannelFull tests sending to a client with a full send buffer.
 func TestClientSendChannelFull(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
 	// Create a client but don't start its Run() goroutine
 	// This prevents the send channel from being drained
-	client := NewClient(
+	client := NewClientForTest(
 		ctx,
 		"test-client",
 		Subscription{Organization: "test-org"},
@@ -331,7 +331,7 @@ func TestClientSendChannelFull(t *testing.T) {
 // This tests the org limiting logic.
 func TestNewClientWithManyOrgs(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 
 	// Create more than 1000 unique orgs
 	manyOrgs := make([]string, 1500)
@@ -339,7 +339,7 @@ func TestNewClientWithManyOrgs(t *testing.T) {
 		manyOrgs[i] = fmt.Sprintf("org-%d", i)
 	}
 
-	client := NewClient(
+	client := NewClientForTest(
 		ctx,
 		"test-client-many-orgs",
 		Subscription{Organization: "*"},
@@ -358,7 +358,7 @@ func TestNewClientWithManyOrgs(t *testing.T) {
 // This uses a short ticker interval to test the periodic check path quickly.
 func TestHubPeriodicCheckWithShortInterval(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 
 	// Set a short periodic check interval for testing
 	hub.periodicCheckInterval = 50 * time.Millisecond
@@ -367,8 +367,8 @@ func TestHubPeriodicCheckWithShortInterval(t *testing.T) {
 	defer hub.Stop()
 
 	// Register a few clients
-	client1 := NewClient(ctx, "client1", Subscription{Organization: "org1", Username: "alice"}, nil, hub, []string{"org1"})
-	client2 := NewClient(ctx, "client2", Subscription{Organization: "org2", Username: "bob"}, nil, hub, []string{"org2"})
+	client1 := NewClientForTest(ctx, "client1", Subscription{Organization: "org1", Username: "alice"}, nil, hub, []string{"org1"})
+	client2 := NewClientForTest(ctx, "client2", Subscription{Organization: "org2", Username: "bob"}, nil, hub, []string{"org2"})
 
 	hub.register <- client1
 	hub.register <- client2
@@ -386,11 +386,11 @@ func TestHubPeriodicCheckWithShortInterval(t *testing.T) {
 // TestClientRunContextCancellation tests client.Run() exits when context is cancelled.
 func TestClientRunContextCancellation(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
-	client := NewClient(ctx, "test-client", Subscription{Organization: "test-org"}, nil, hub, []string{"test-org"})
+	client := NewClientForTest(ctx, "test-client", Subscription{Organization: "test-org"}, nil, hub, []string{"test-org"})
 
 	// Create cancelable context for client.Run()
 	runCtx, cancel := context.WithCancel(ctx)

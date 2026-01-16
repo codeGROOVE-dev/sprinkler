@@ -1,9 +1,13 @@
 package srv
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/codeGROOVE-dev/sprinkler/pkg/github"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
 )
 
 const (
@@ -240,7 +244,86 @@ func matchesPRSubscription(sub Subscription, payload map[string]any, eventOrg st
 	return false
 }
 
-func matches(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
+// repoInfo holds repository metadata extracted from event payloads.
+type repoInfo struct {
+	Private  bool
+	FullName string
+}
+
+// extractRepoFromPayload extracts repository information from a GitHub webhook payload.
+// Returns nil if no repository information is found in the payload.
+func extractRepoFromPayload(payload map[string]any) *repoInfo {
+	repoData, ok := payload["repository"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	private, ok := repoData["private"].(bool)
+	if !ok {
+		private = false // Default to false if not present
+	}
+
+	fullName, ok := repoData["full_name"].(string)
+	if !ok {
+		fullName = "" // Default to empty string if not present
+	}
+
+	return &repoInfo{
+		Private:  private,
+		FullName: fullName,
+	}
+}
+
+// matchesForTest is a test helper that creates a minimal client for testing.
+// This maintains backward compatibility with existing tests.
+func matchesForTest(sub Subscription, event Event, payload map[string]any, userOrgs map[string]bool) bool {
+	// Create a minimal client for testing
+	ctx := context.Background()
+	client := &Client{
+		subscription: sub,
+		userOrgs:     userOrgs,
+		hub: &Hub{
+			enforceTiers: false, // Tests default to no enforcement
+		},
+		tier: github.TierFree,
+	}
+	return matches(ctx, client, event, payload)
+}
+
+func matches(ctx context.Context, client *Client, event Event, payload map[string]any) bool {
+	sub := client.subscription
+	userOrgs := client.userOrgs
+
+	// Extract repository info early to check private repo access
+	repo := extractRepoFromPayload(payload)
+
+	// Filter private repo events based on tier
+	if repo != nil && repo.Private {
+		canAccess := client.CanAccessPrivateRepos()
+		enforceTiers := client.hub.enforceTiers
+
+		if !canAccess {
+			if enforceTiers {
+				// Enforcement is active - actually filter the event
+				logger.Info(ctx, "filtering private repo event (tier enforcement active)", logger.Fields{
+					"user":       sub.Username,
+					"tier":       string(client.tier),
+					"repo":       repo.FullName,
+					"event_type": event.Type,
+				})
+				return false
+			}
+			// Enforcement not active - log warning but allow event through
+			logger.Warn(ctx, "would filter private repo event if enforcement was active", logger.Fields{
+				"user":       sub.Username,
+				"tier":       string(client.tier),
+				"repo":       repo.FullName,
+				"event_type": event.Type,
+				"suggestion": "upgrade to Pro or Flock tier for private repo access",
+			})
+		}
+	}
+
 	// Check if event type matches subscription
 	if len(sub.EventTypes) > 0 {
 		found := false

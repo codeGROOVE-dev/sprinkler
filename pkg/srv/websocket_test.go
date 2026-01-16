@@ -20,7 +20,7 @@ import (
 // TestPreValidateAuth tests the PreValidateAuth method.
 func TestPreValidateAuth(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -74,7 +74,7 @@ func TestPreValidateAuth(t *testing.T) {
 // TestPreValidateAuthTestMode tests that test mode skips validation.
 func TestPreValidateAuthTestMode(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -94,7 +94,7 @@ func TestPreValidateAuthTestMode(t *testing.T) {
 // TestWebSocketHandlerWithMockConnection tests the full WebSocket handler lifecycle.
 func TestWebSocketHandlerWithMockConnection(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -142,7 +142,7 @@ func TestWebSocketHandlerWithMockConnection(t *testing.T) {
 // TestWebSocketHandlerEventFiltering tests that only allowed events are accepted.
 func TestWebSocketHandlerEventFiltering(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -208,7 +208,7 @@ func TestWSCloser(t *testing.T) {
 // TestExtractGitHubTokenTestMode tests token extraction in test mode.
 func TestExtractGitHubTokenTestMode(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -253,7 +253,7 @@ func TestExtractGitHubTokenTestMode(t *testing.T) {
 // TestNewWebSocketHandler tests handler creation with and without allowed events.
 func TestNewWebSocketHandler(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -423,7 +423,7 @@ func TestSendErrorResponse(t *testing.T) {
 // TestHandleInvalidAuthToken tests handler with invalid auth token.
 func TestHandleInvalidAuthToken(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -461,7 +461,7 @@ func TestHandleInvalidAuthToken(t *testing.T) {
 // TestHandleInvalidSubscriptionJSON tests handler with malformed subscription.
 func TestHandleInvalidSubscriptionJSON(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -491,7 +491,7 @@ func TestHandleInvalidSubscriptionJSON(t *testing.T) {
 // TestHandlePingPong tests ping/pong handling in the handler.
 func TestHandlePingPong(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -544,7 +544,7 @@ func TestHandlePingPong(t *testing.T) {
 // TestHandleWithEventTypes tests subscription with specific event types.
 func TestHandleWithEventTypes(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -588,7 +588,7 @@ func TestHandleWithEventTypes(t *testing.T) {
 // TestHandleUserEventsOnly tests subscription with user_events_only flag.
 func TestHandleUserEventsOnly(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -631,7 +631,7 @@ func TestHandleUserEventsOnly(t *testing.T) {
 // TestReadSubscriptionMaxPayload tests subscription size limit.
 func TestReadSubscriptionMaxPayload(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -693,7 +693,7 @@ func TestCloseWebSocket(t *testing.T) {
 // TestExtractGitHubTokenInTestMode tests token extraction skips auth in test mode.
 func TestExtractGitHubTokenInTestMode(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -729,7 +729,7 @@ func TestHubBroadcast(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -757,7 +757,7 @@ func TestClientWriteFunction(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -810,7 +810,7 @@ func TestCloseWebSocketWithClient(t *testing.T) {
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		wc := &wsCloser{ws: ws}
 
-		hub := NewHub()
+		hub := NewHub(false)
 		client := &Client{
 			ID:      "test-client",
 			hub:     hub,
@@ -837,7 +837,7 @@ func TestCloseWebSocketWithClient(t *testing.T) {
 // TestSubscriptionValidationEdgeCases tests validation edge cases.
 func TestSubscriptionValidationEdgeCases(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -877,7 +877,7 @@ func TestSubscriptionValidationEdgeCases(t *testing.T) {
 // TestHandleWildcardOrganization tests wildcard organization subscription.
 func TestHandleWildcardOrganization(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -919,7 +919,7 @@ func TestHandleWildcardOrganization(t *testing.T) {
 // TestHandleWithUsername tests subscription with username in test mode.
 func TestHandleWithUsername(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -961,7 +961,7 @@ func TestHandleWithUsername(t *testing.T) {
 // TestHandleNoOrganization tests subscription without organization.
 func TestHandleNoOrganization(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1001,7 +1001,7 @@ func TestHandleNoOrganization(t *testing.T) {
 // TestHandleMultipleEventTypes tests subscription with multiple event types.
 func TestHandleMultipleEventTypes(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1042,7 +1042,7 @@ func TestHandleMultipleEventTypes(t *testing.T) {
 // TestHandleSubscriptionWithPRURL tests subscription with PR URL.
 func TestHandleSubscriptionWithPRURL(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1086,7 +1086,7 @@ func TestClientRunEventMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1153,7 +1153,7 @@ func TestClientRunControlMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1207,7 +1207,7 @@ func TestHubPeriodicCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 
 	// Use a short ticker interval for testing
 	go func() {
@@ -1245,7 +1245,7 @@ func TestHubPeriodicCheck(t *testing.T) {
 // TestParseSubscriptionErrors tests error handling in subscription parsing.
 func TestParseSubscriptionErrors(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1313,7 +1313,7 @@ func TestParseSubscriptionErrors(t *testing.T) {
 // TestClientWriteErrorPaths tests error handling in client.write.
 func TestClientWriteErrorPaths(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1369,7 +1369,7 @@ func TestClientWriteErrorPaths(t *testing.T) {
 // TestSendInvalidJSON tests sending invalid JSON to trigger error response.
 func TestSendInvalidJSON(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1406,7 +1406,7 @@ func TestSendInvalidJSON(t *testing.T) {
 // TestCloseWebSocketMultipleTimes tests calling Close multiple times.
 func TestCloseWebSocketMultipleTimes(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1449,7 +1449,7 @@ func TestCloseWebSocketMultipleTimes(t *testing.T) {
 // TestHandleConnectionLimitReached tests behavior when connection limit is reached.
 func TestHandleConnectionLimitReached(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1504,7 +1504,7 @@ func TestHandleConnectionLimitReached(t *testing.T) {
 // TestBroadcastWithMismatchedOrganization tests broadcasting to clients with non-matching orgs.
 func TestBroadcastWithMismatchedOrganization(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1565,7 +1565,7 @@ func TestClientRunDirectly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1651,7 +1651,7 @@ func TestClientRunDirectly(t *testing.T) {
 // TestExtractGitHubTokenMissingHeader tests extractGitHubToken with no auth header.
 func TestExtractGitHubTokenMissingHeader(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1683,7 +1683,7 @@ func TestExtractGitHubTokenMissingHeader(t *testing.T) {
 // TestExtractGitHubTokenInvalidPrefix tests extractGitHubToken with wrong prefix.
 func TestExtractGitHubTokenInvalidPrefix(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1716,7 +1716,7 @@ func TestExtractGitHubTokenInvalidPrefix(t *testing.T) {
 // TestExtractGitHubTokenInvalidFormat tests extractGitHubToken with invalid token format.
 func TestExtractGitHubTokenInvalidFormat(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1748,7 +1748,7 @@ func TestExtractGitHubTokenInvalidFormat(t *testing.T) {
 // TestValidateWildcardOrg tests wildcard organization validation with mock GitHub client.
 func TestValidateWildcardOrg(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1811,7 +1811,7 @@ func TestValidateWildcardOrg(t *testing.T) {
 // TestValidateSpecificOrg tests specific organization validation.
 func TestValidateSpecificOrg(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1872,7 +1872,7 @@ func TestValidateSpecificOrg(t *testing.T) {
 // TestValidateSpecificOrgNotMember tests rejection when user isn't org member.
 func TestValidateSpecificOrgNotMember(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1925,7 +1925,7 @@ func TestValidateSpecificOrgNotMember(t *testing.T) {
 // TestValidateNoOrg tests validation when no org is specified.
 func TestValidateNoOrg(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -1982,7 +1982,7 @@ func TestValidateNoOrg(t *testing.T) {
 // TestValidateNoOrgAuthError tests error handling in no-org subscription.
 func TestValidateNoOrgAuthError(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2039,7 +2039,7 @@ func TestValidateNoOrgAuthError(t *testing.T) {
 // TestValidateSpecificOrgAccessDenied tests access_denied error path.
 func TestValidateSpecificOrgAccessDenied(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2096,7 +2096,7 @@ func TestValidateSpecificOrgAccessDenied(t *testing.T) {
 // TestRateLimitError tests rate limit error handling.
 func TestRateLimitError(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2153,7 +2153,7 @@ func TestRateLimitError(t *testing.T) {
 // TestDefaultEventTypes tests that allowed events are set as defaults when none specified.
 func TestDefaultEventTypes(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2218,7 +2218,7 @@ func TestDefaultEventTypes(t *testing.T) {
 // TestHandleAuthError tests authentication error handling.
 func TestHandleAuthError(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2275,7 +2275,7 @@ func TestHandleAuthError(t *testing.T) {
 // TestEventTypeNotAllowed tests rejection when requesting an event type not in allowed list.
 func TestEventTypeNotAllowed(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2335,7 +2335,7 @@ func TestEventTypeNotAllowed(t *testing.T) {
 // TestGitHubAppAutoOrg tests auto-setting org for GitHub Apps with single installation.
 func TestGitHubAppAutoOrg(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2398,7 +2398,7 @@ func TestGitHubAppAutoOrg(t *testing.T) {
 // TestGitHubAppMultipleOrgsNoAutoSet tests that GitHub Apps with multiple orgs don't auto-set.
 func TestGitHubAppMultipleOrgsNoAutoSet(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2461,7 +2461,7 @@ func TestGitHubAppMultipleOrgsNoAutoSet(t *testing.T) {
 // TestWildcardWithMultipleOrgs tests wildcard subscription with user in multiple orgs.
 func TestWildcardWithMultipleOrgs(t *testing.T) {
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2624,7 +2624,7 @@ func TestHandleAuthErrorWithSendFailure(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2673,7 +2673,7 @@ func TestConcurrentClientCloseOperations(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2705,7 +2705,7 @@ func TestReadSubscriptionWithMalformedJSON(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2741,7 +2741,7 @@ func TestValidateAuthConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2792,7 +2792,7 @@ func TestHandleRapidDisconnectReconnect(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 	defer hub.Stop()
 
@@ -2830,7 +2830,7 @@ func TestHandleConnectionDuringShutdown(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	hub := NewHub()
+	hub := NewHub(false)
 	go hub.Run(ctx)
 
 	connLimiter := security.NewConnectionLimiter(10, 50)

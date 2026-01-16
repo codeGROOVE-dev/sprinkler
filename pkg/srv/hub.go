@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codeGROOVE-dev/sprinkler/pkg/github"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/logger"
 )
 
@@ -52,8 +53,10 @@ type Hub struct {
 	stop                  chan struct{}
 	stopped               chan struct{}
 	mu                    sync.RWMutex
-	periodicCheckInterval time.Duration // For testing; 0 means use default (1 minute)
-	commitCache           *CommitCache  // Maps commit SHA → PR info for check event association
+	periodicCheckInterval time.Duration     // For testing; 0 means use default (1 minute)
+	commitCache           *CommitCache      // Maps commit SHA → PR info for check event association
+	tierCache             *github.TierCache // Caches GitHub Marketplace tier lookups
+	enforceTiers          bool              // If true, enforce tier restrictions; if false, log warnings only
 }
 
 // broadcastMsg contains an event and the payload for matching.
@@ -70,15 +73,18 @@ const (
 )
 
 // NewHub creates a new client hub.
-func NewHub() *Hub {
+// enforceTiers: if true, enforce tier restrictions; if false, log warnings only.
+func NewHub(enforceTiers bool) *Hub {
 	return &Hub{
-		clients:     make(map[string]*Client),
-		register:    make(chan *Client, registerBufferSize),       // Buffer to prevent blocking
-		unregister:  make(chan string, unregisterBufferSize),      // Buffer to prevent blocking
-		broadcast:   make(chan broadcastMsg, broadcastBufferSize), // Limited buffer to prevent memory exhaustion
-		stop:        make(chan struct{}),
-		stopped:     make(chan struct{}),
-		commitCache: NewCommitCache(),
+		clients:      make(map[string]*Client),
+		register:     make(chan *Client, registerBufferSize),       // Buffer to prevent blocking
+		unregister:   make(chan string, unregisterBufferSize),      // Buffer to prevent blocking
+		broadcast:    make(chan broadcastMsg, broadcastBufferSize), // Limited buffer to prevent memory exhaustion
+		stop:         make(chan struct{}),
+		stopped:      make(chan struct{}),
+		commitCache:  NewCommitCache(),
+		tierCache:    github.NewTierCache(1 * time.Hour), // Cache tier lookups for 1 hour
+		enforceTiers: enforceTiers,
 	}
 }
 
@@ -168,7 +174,7 @@ func (h *Hub) Run(ctx context.Context) {
 			matched := 0
 			dropped := 0
 			for _, client := range clientSnapshot {
-				if matches(client.subscription, msg.event, msg.payload, client.userOrgs) {
+				if matches(ctx, client, msg.event, msg.payload) {
 					// Try to send (safe against closed channels)
 					if h.trySendEvent(client, msg.event) {
 						matched++
@@ -225,6 +231,10 @@ func (h *Hub) Stop() {
 		// Already stopped
 	default:
 		close(h.stop)
+	}
+	// Stop tier cache cleanup goroutine
+	if h.tierCache != nil {
+		h.tierCache.Stop()
 	}
 }
 

@@ -150,9 +150,9 @@ func TestWildcardOrganizationEdgeCases(t *testing.T) {
 				Type: tt.eventType,
 			}
 
-			result := matches(tt.subscription, event, tt.payload, tt.userOrgs)
+			result := matchesForTest(tt.subscription, event, tt.payload, tt.userOrgs)
 			if result != tt.shouldMatch {
-				t.Errorf("matches() = %v, want %v", result, tt.shouldMatch)
+				t.Errorf("matchesForTest() = %v, want %v", result, tt.shouldMatch)
 			}
 		})
 	}
@@ -285,7 +285,7 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 		manyOrgs[i] = fmt.Sprintf("org%d", i)
 	}
 
-	client := NewClient(context.Background(),
+	client := NewClientForTest(context.Background(),
 		"test-id",
 		Subscription{Organization: "*", Username: "testuser"},
 		nil,
@@ -317,10 +317,10 @@ func TestOrganizationLimitEdgeCases(t *testing.T) {
 
 // TestConcurrentMapAccess tests for race conditions in map access
 func TestConcurrentMapAccess(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 
 	for i := range 10 {
-		client := NewClient(context.Background(),
+		client := NewClientForTest(context.Background(),
 			fmt.Sprintf("client%d", i),
 			Subscription{
 				Organization: "*",
@@ -351,7 +351,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 
 			// Test concurrent matching
 			for _, client := range hub.clients {
-				matches(client.subscription, event, payload, client.userOrgs)
+				matchesForTest(client.subscription, event, payload, client.userOrgs)
 			}
 			done <- true
 		}(i)
@@ -365,7 +365,7 @@ func TestConcurrentMapAccess(t *testing.T) {
 
 // TestChannelBufferOverflow tests behavior when channels are full
 func TestChannelBufferOverflow(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 
 	// Fill the broadcast channel to capacity
 	for i := range broadcastBufferSize {
@@ -459,9 +459,9 @@ func TestEmptyEventPayload(t *testing.T) {
 			userOrgs := map[string]bool{"myorg": true}
 
 			// This should not panic
-			result := matches(tt.sub, event, tt.payload, userOrgs)
+			result := matchesForTest(tt.sub, event, tt.payload, userOrgs)
 			if result != tt.shouldMatch {
-				t.Errorf("matches() = %v, want %v", result, tt.shouldMatch)
+				t.Errorf("matchesForTest() = %v, want %v", result, tt.shouldMatch)
 			}
 		})
 	}

@@ -21,7 +21,7 @@ import (
 // - Multiple concurrent cleanups are safe
 // - No "send on closed channel" panics
 func TestConcurrentClientDisconnect(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -45,7 +45,7 @@ func TestConcurrentClientDisconnect(t *testing.T) {
 			}
 
 			// Create client (we'll use nil for websocket since we're not actually writing)
-			client := NewClient(ctx,
+			client := NewClientForTest(ctx,
 				fmt.Sprintf("test-client-%d", clientNum),
 				sub,
 				nil, // WebSocket not needed for this test
@@ -102,7 +102,7 @@ func TestConcurrentClientDisconnect(t *testing.T) {
 
 // TestClientCloseIdempotency verifies that Client.Close() can be called multiple times safely.
 func TestClientCloseIdempotency(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -115,7 +115,7 @@ func TestClientCloseIdempotency(t *testing.T) {
 		EventTypes:   []string{"pull_request"},
 	}
 
-	client := NewClient(ctx,
+	client := NewClientForTest(ctx,
 		"test-client-close-idempotent",
 		sub,
 		nil,
@@ -169,7 +169,7 @@ func TestClientCloseIdempotency(t *testing.T) {
 // TestConcurrentBroadcastAndDisconnect tests broadcasting events while clients disconnect.
 // This verifies that the non-blocking send pattern in Hub.Broadcast handles client cleanup safely.
 func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -187,7 +187,7 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 			Username:     "testuser",
 			EventTypes:   []string{"pull_request"},
 		}
-		client := NewClient(ctx,
+		client := NewClientForTest(ctx,
 			fmt.Sprintf("test-client-%d", i),
 			sub,
 			nil,
@@ -257,7 +257,7 @@ func TestConcurrentBroadcastAndDisconnect(t *testing.T) {
 func TestRapidConnectDisconnect(t *testing.T) {
 	t.Skip("Skipping flaky test - scenario covered by TestConcurrentBroadcastAndDisconnect")
 
-	hub := NewHub()
+	hub := NewHub(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -278,7 +278,7 @@ func TestRapidConnectDisconnect(t *testing.T) {
 				EventTypes:   []string{"pull_request"},
 			}
 
-			client := NewClient(ctx,
+			client := NewClientForTest(ctx,
 				fmt.Sprintf("test-client-%d", cycle),
 				sub,
 				nil,
@@ -319,7 +319,7 @@ func TestRapidConnectDisconnect(t *testing.T) {
 
 // TestHubShutdownWithActiveClients tests hub cleanup when clients are still active.
 func TestHubShutdownWithActiveClients(t *testing.T) {
-	hub := NewHub()
+	hub := NewHub(false)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go hub.Run(ctx)
@@ -331,7 +331,7 @@ func TestHubShutdownWithActiveClients(t *testing.T) {
 			Organization: "testorg",
 			Username:     "testuser",
 		}
-		client := NewClient(ctx,
+		client := NewClientForTest(ctx,
 			fmt.Sprintf("test-client-%d", i),
 			sub,
 			nil,

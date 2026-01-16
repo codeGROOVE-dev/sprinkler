@@ -19,7 +19,7 @@ func TestWebhookHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 
 	secret := "testsecret"
@@ -118,7 +118,7 @@ func TestWebhookHandlerEventFiltering(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -169,7 +169,7 @@ func TestWebhookHandlerPayloadTooLarge(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -198,7 +198,7 @@ func TestWebhookHandlerMissingSignature(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -227,7 +227,7 @@ func TestWebhookHandlerInvalidJSON(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -256,7 +256,7 @@ func TestWebhookHandlerCheckRunWithCommit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -391,7 +391,7 @@ func TestWebhookHandlerNoPRURL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -429,7 +429,7 @@ func TestWebhookHandlerCheckEventWithEmptyPRArray(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -573,7 +573,7 @@ func TestCheckEventRaceCondition(t *testing.T) { //nolint:gocognit,maintidx // T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 
@@ -810,7 +810,7 @@ func TestCheckEventRaceConditionEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := srv.NewHub()
+	h := srv.NewHub(false)
 	go h.Run(ctx)
 	defer h.Stop()
 

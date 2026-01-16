@@ -10,6 +10,9 @@ type APIClient interface {
 
 	// ValidateOrgMembership validates that the authenticated user is a member of the specified organization.
 	ValidateOrgMembership(ctx context.Context, org string) (username string, orgs []string, err error)
+
+	// UserTier fetches the user's GitHub Marketplace subscription tier.
+	UserTier(ctx context.Context, username string) (Tier, error)
 }
 
 // Ensure Client implements APIClient interface.

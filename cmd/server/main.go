@@ -53,6 +53,7 @@ var (
 		return "*"
 	}(), "Comma-separated list of allowed webhook event types (use '*' for all, default: '*')")
 	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
+	enforceTiers = flag.Bool("enforce-tiers", false, "Enforce GitHub Marketplace tier restrictions (default: false, logs warnings only)")
 )
 
 //nolint:funlen,gocognit,lll,revive,maintidx // Main function orchestrates entire server setup and cannot be split without losing clarity
@@ -88,8 +89,14 @@ func main() {
 
 	// CORS support removed - WebSocket clients should handle auth via Authorization header
 
-	hub := srv.NewHub()
+	hub := srv.NewHub(*enforceTiers)
 	go hub.Run(ctx)
+
+	if *enforceTiers {
+		log.Println("Tier enforcement ENABLED - private repo access restricted to Pro/Flock tiers")
+	} else {
+		log.Println("Tier enforcement DISABLED - will log warnings only (all users can access private repos)")
+	}
 
 	// Create connection limiter for WebSocket connections
 	connLimiter := security.NewConnectionLimiter(*maxConnsPerIP, *maxConnsTotal)

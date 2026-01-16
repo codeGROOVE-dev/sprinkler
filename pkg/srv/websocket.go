@@ -139,6 +139,15 @@ func (h *WebSocketHandler) extractGitHubToken(ctx context.Context, ws *websocket
 	return githubToken, true
 }
 
+// getGitHubClient creates a GitHub API client using the factory if provided,
+// otherwise uses the default client constructor.
+func (h *WebSocketHandler) getGitHubClient(githubToken string) github.APIClient {
+	if h.githubClientFactory != nil {
+		return h.githubClientFactory(githubToken)
+	}
+	return github.NewClient(githubToken, nil)
+}
+
 // errorInfo holds error response details.
 type errorInfo struct {
 	code    string
@@ -673,6 +682,34 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		return
 	}
 
+	// Fetch user's GitHub Marketplace tier
+	var tier github.Tier
+	if cached, ok := h.hub.tierCache.Get(sub.Username); ok {
+		tier = cached
+		logger.Info(ctx, "using cached tier", logger.Fields{
+			"username": sub.Username,
+			"tier":     string(tier),
+		})
+	} else {
+		// Create GitHub client for tier lookup
+		ghClient := h.getGitHubClient(githubToken)
+		fetchedTier, tierErr := ghClient.UserTier(ctx, sub.Username)
+		if tierErr != nil {
+			logger.Warn(ctx, "failed to fetch marketplace tier, defaulting to free", logger.Fields{
+				"username": sub.Username,
+				"error":    tierErr.Error(),
+			})
+			tier = github.TierFree
+		} else {
+			tier = fetchedTier
+			h.hub.tierCache.Set(sub.Username, tier)
+			logger.Info(ctx, "fetched marketplace tier", logger.Fields{
+				"username": sub.Username,
+				"tier":     string(tier),
+			})
+		}
+	}
+
 	// Create client with unique ID using crypto-random only (no timestamp for security)
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 	const idLength = 32 // 32 chars with 64 possible values = 192 bits of entropy
@@ -701,6 +738,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		ws,
 		h.hub,
 		userOrgs,
+		tier,
 	)
 
 	// Will be incremented when registered, but show current count
@@ -722,10 +760,13 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 
 	// Send success response to client immediately after successful subscription
 	successResp := map[string]any{
-		"type":         "subscription_confirmed",
-		"organization": sub.Organization,
-		"username":     sub.Username,
-		"event_types":  sub.EventTypes,
+		"type":                    "subscription_confirmed",
+		"organization":            sub.Organization,
+		"username":                sub.Username,
+		"event_types":             sub.EventTypes,
+		"tier":                    string(tier),
+		"private_repos_enabled":   tier == github.TierPro || tier == github.TierFlock,
+		"tier_enforcement_active": h.hub.enforceTiers,
 	}
 
 	// Set a write deadline for the success response

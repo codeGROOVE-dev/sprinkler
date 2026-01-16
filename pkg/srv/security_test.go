@@ -353,14 +353,14 @@ func TestMatchesSecurityEdgeCases(t *testing.T) {
 			if tt.shouldPanic {
 				defer func() {
 					if r := recover(); r == nil {
-						t.Errorf("matches() did not panic as expected")
+						t.Errorf("matchesForTest() did not panic as expected")
 					}
 				}()
 			}
 
-			result := matches(tt.sub, tt.event, tt.payload, tt.userOrgs)
+			result := matchesForTest(tt.sub, tt.event, tt.payload, tt.userOrgs)
 			if result != tt.shouldMatch {
-				t.Errorf("matches() = %v, want %v", result, tt.shouldMatch)
+				t.Errorf("matchesForTest() = %v, want %v", result, tt.shouldMatch)
 			}
 		})
 	}
