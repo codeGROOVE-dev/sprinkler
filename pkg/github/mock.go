@@ -8,16 +8,18 @@ import (
 
 // MockClient is a mock GitHub API client for testing.
 // Thread-safe for concurrent access.
+//
+//nolint:govet // fieldalignment: minimal impact, current order is logical
 type MockClient struct {
+	Orgs                       []string
 	Err                        error
 	Username                   string
 	LastValidatedOrg           string
-	Orgs                       []string
 	Tier                       Tier // Mock tier to return
+	mu                         sync.Mutex
 	UserAndOrgsCalls           int
 	ValidateOrgMembershipCalls int
 	UserTierCalls              int
-	mu                         sync.Mutex
 }
 
 // UserAndOrgs returns the mock user info.

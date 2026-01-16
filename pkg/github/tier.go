@@ -95,25 +95,21 @@ func (c *Client) UserTier(ctx context.Context, username string) (Tier, error) {
 		return TierFree, fmt.Errorf("failed to parse marketplace response: %w", err)
 	}
 
-	tier := mapPlanToTier(account.Plan.Name)
+	// Map plan name to tier (update when marketplace listing is approved)
+	var tier Tier
+	switch strings.ToLower(account.Plan.Name) {
+	case "pro":
+		tier = TierPro
+	case "flock", "team", "enterprise":
+		tier = TierFlock
+	default:
+		tier = TierFree
+	}
+
 	c.logger.Info("marketplace tier detected",
 		"username", username,
 		"plan", account.Plan.Name,
 		"tier", tier)
 
 	return tier, nil
-}
-
-// mapPlanToTier maps GitHub Marketplace plan names to internal tier constants.
-// Update this function when your marketplace listing is approved with the actual plan names.
-func mapPlanToTier(planName string) Tier {
-	switch strings.ToLower(planName) {
-	case "pro":
-		return TierPro
-	case "flock", "team", "enterprise":
-		return TierFlock
-	default:
-		// Unknown plan names default to free tier
-		return TierFree
-	}
 }

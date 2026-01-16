@@ -7,18 +7,20 @@ import (
 
 // TierCache caches tier lookups to reduce API calls to GitHub Marketplace.
 // Implements thread-safe in-memory caching with TTL expiration.
+//
+//nolint:govet // fieldalignment: minimal impact, current order is logical
 type TierCache struct {
 	mu      sync.RWMutex
 	cache   map[string]*tierEntry
-	ttl     time.Duration
 	stopCh  chan struct{}
 	stopped chan struct{}
+	ttl     time.Duration
 }
 
 // tierEntry represents a cached tier with expiration.
 type tierEntry struct {
-	tier      Tier
 	expiresAt time.Time
+	tier      Tier
 }
 
 // NewTierCache creates a new tier cache with the specified TTL.

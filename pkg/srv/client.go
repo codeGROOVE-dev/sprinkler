@@ -44,16 +44,18 @@ import (
 //	  4. defer closeWebSocket() closes the WebSocket connection only
 //	  5. Client.Run() sees context cancellation, exits, calls defer client.Close()
 //	  6. Hub.Run() processes unregister, calls client.Close() (idempotent via sync.Once)
+//
+//nolint:govet // fieldalignment: minimal impact, current order is logical
 type Client struct {
+	subscription Subscription
+	ID           string
+	tier         github.Tier // GitHub Marketplace tier
 	conn         *websocket.Conn
 	send         chan Event
 	control      chan map[string]any // Control messages (pongs, shutdown notices)
 	hub          *Hub
 	done         chan struct{}
 	userOrgs     map[string]bool
-	ID           string
-	subscription Subscription
-	tier         github.Tier // GitHub Marketplace tier
 	closeOnce    sync.Once
 	closed       uint32 // Atomic flag: 1 if closed, 0 if open
 }

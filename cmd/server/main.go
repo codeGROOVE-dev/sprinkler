@@ -53,7 +53,12 @@ var (
 		return "*"
 	}(), "Comma-separated list of allowed webhook event types (use '*' for all, default: '*')")
 	debugHeaders = flag.Bool("debug-headers", false, "Log request headers for debugging (security warning: may log sensitive data)")
-	enforceTiers = flag.Bool("enforce-tiers", false, "Enforce GitHub Marketplace tier restrictions (default: false, logs warnings only)")
+	enforceTiers = flag.Bool("enforce-tiers", func() bool {
+		if val := os.Getenv("ENFORCE_TIERS"); val != "" {
+			return val == "true" || val == "1"
+		}
+		return false
+	}(), "Enforce GitHub Marketplace tier restrictions (default: false, logs warnings only; can set via ENFORCE_TIERS env)")
 )
 
 //nolint:funlen,gocognit,lll,revive,maintidx // Main function orchestrates entire server setup and cannot be split without losing clarity
