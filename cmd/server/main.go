@@ -35,7 +35,10 @@ const (
 // contextKey is a custom type for context keys to avoid collisions.
 type contextKey string
 
-const reservationTokenKey contextKey = "reservation_token"
+const (
+	reservationTokenKey contextKey = "reservation_token"
+	userAgentKey        contextKey = "user_agent"
+)
 
 var (
 	webhookSecret = flag.String("webhook-secret", os.Getenv("GITHUB_WEBHOOK_SECRET"), "GitHub webhook secret for signature verification")
@@ -185,6 +188,22 @@ func main() {
 			return
 		}
 
+		// Validate User-Agent header format
+		userAgent, err := security.ParseUserAgent(r)
+		if err != nil {
+			log.Printf("WebSocket 400: invalid user-agent ip=%s error=%q user_agent=%q",
+				ip, err.Error(), r.UserAgent())
+			w.WriteHeader(http.StatusBadRequest)
+			msg := fmt.Sprintf("400 Bad Request: %s\n", err.Error())
+			if _, writeErr := w.Write([]byte(msg)); writeErr != nil {
+				log.Printf("failed to write 400 response: %v", writeErr)
+			}
+			return
+		}
+
+		// Store parsed User-Agent in context for handler to use
+		r = r.WithContext(context.WithValue(r.Context(), userAgentKey, userAgent))
+
 		// Pre-validate authentication before WebSocket upgrade
 		authHeader := r.Header.Get("Authorization")
 		if !wsHandler.PreValidateAuth(r) {
@@ -235,7 +254,7 @@ func main() {
 		}
 
 		// Set reservation token in request context so websocket handler can commit it
-		r = r.WithContext(context.WithValue(r.Context(), reservationTokenKey, reservationToken))
+		r = r.WithContext(context.WithValue(r.Context(), reservationTokenKey, reservationToken)) //nolint:contextcheck // We're properly using r.Context() to derive the new context
 
 		// Log successful auth and proceed to upgrade
 		log.Printf("WebSocket UPGRADE: ip=%s duration=%v", ip, time.Since(startTime))

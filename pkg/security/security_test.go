@@ -1,6 +1,7 @@
 package security
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -604,6 +605,141 @@ func TestClientIP(t *testing.T) {
 
 			if got := ClientIP(req); got != tt.want {
 				t.Errorf("ClientIP() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseUserAgent(t *testing.T) {
+	tests := []struct {
+		name      string
+		userAgent string
+		wantName  string
+		wantVer   string
+		wantErr   error
+	}{
+		{
+			name:      "valid format with v prefix",
+			userAgent: "slacker/v1.0.0",
+			wantName:  "slacker",
+			wantVer:   "v1.0.0",
+			wantErr:   nil,
+		},
+		{
+			name:      "valid format without v prefix",
+			userAgent: "myapp/1.2.3",
+			wantName:  "myapp",
+			wantVer:   "1.2.3",
+			wantErr:   nil,
+		},
+		{
+			name:      "valid format with hyphens",
+			userAgent: "my-cool-app/v2.1.0",
+			wantName:  "my-cool-app",
+			wantVer:   "v2.1.0",
+			wantErr:   nil,
+		},
+		{
+			name:      "valid format with underscores",
+			userAgent: "my_app/0.0.1",
+			wantName:  "my_app",
+			wantVer:   "0.0.1",
+			wantErr:   nil,
+		},
+		{
+			name:      "valid format with additional info",
+			userAgent: "slacker/v1.0.0 (linux; amd64)",
+			wantName:  "slacker",
+			wantVer:   "v1.0.0",
+			wantErr:   nil,
+		},
+		{
+			name:      "valid format with long version",
+			userAgent: "app/v1.2.3-beta.1+build.123",
+			wantName:  "app",
+			wantVer:   "v1.2.3-beta.1+build.123",
+			wantErr:   nil,
+		},
+		{
+			name:      "missing user agent",
+			userAgent: "",
+			wantErr:   ErrMissingUserAgent,
+		},
+		{
+			name:      "only whitespace",
+			userAgent: "   \t  \n  ",
+			wantErr:   ErrMissingUserAgent,
+		},
+		{
+			name:      "missing version",
+			userAgent: "slacker",
+			wantErr:   ErrInvalidUserAgent,
+		},
+		{
+			name:      "missing name",
+			userAgent: "/v1.0.0",
+			wantErr:   ErrInvalidUserAgent,
+		},
+		{
+			name:      "no slash separator",
+			userAgent: "slackerv1.0.0",
+			wantErr:   ErrInvalidUserAgent,
+		},
+		{
+			name:      "invalid characters in name",
+			userAgent: "my app/v1.0.0",
+			wantErr:   ErrInvalidUserAgent,
+		},
+		{
+			name:      "version with whitespace",
+			userAgent: "myapp/v1.0.0 beta",
+			wantName:  "myapp",
+			wantVer:   "v1.0.0",
+			wantErr:   nil,
+		},
+		{
+			name:      "name too long",
+			userAgent: "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm/v1.0.0",
+			wantErr:   ErrInvalidUserAgent,
+		},
+		{
+			name:      "version too long",
+			userAgent: "app/123456789012345678901234567890123",
+			wantErr:   ErrInvalidUserAgent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			req.Header.Set("User-Agent", tt.userAgent)
+
+			ua, err := ParseUserAgent(req)
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("ParseUserAgent() expected error %v, got nil", tt.wantErr)
+					return
+				}
+				// Check if error is or wraps expected error
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("ParseUserAgent() error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ParseUserAgent() unexpected error = %v", err)
+				return
+			}
+
+			if ua.Name != tt.wantName {
+				t.Errorf("ParseUserAgent() name = %v, want %v", ua.Name, tt.wantName)
+			}
+			if ua.Version != tt.wantVer {
+				t.Errorf("ParseUserAgent() version = %v, want %v", ua.Version, tt.wantVer)
+			}
+			if ua.Raw != tt.userAgent {
+				t.Errorf("ParseUserAgent() raw = %v, want %v", ua.Raw, tt.userAgent)
 			}
 		})
 	}

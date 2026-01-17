@@ -112,6 +112,7 @@ func run() error {
 	// Create client configuration
 	config := client.Config{
 		ServerURL:      url,
+		UserAgent:      fmt.Sprintf("sprinkler-cli/%s", client.Version),
 		Organization:   *org,
 		Token:          githubToken,
 		EventTypes:     eventTypesList,

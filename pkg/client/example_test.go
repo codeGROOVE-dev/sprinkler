@@ -15,6 +15,7 @@ func ExampleClient() {
 	// Create client configuration
 	config := client.Config{
 		ServerURL:      "wss://hook.example.com/ws",
+		UserAgent:      "myapp/v1.0.0", // Required: client name and version
 		Organization:   "myorg",
 		Token:          "ghp_yourtoken",
 		EventTypes:     []string{"pull_request", "issue_comment"},
@@ -53,6 +54,7 @@ func ExampleClient() {
 func ExampleClient_gracefulShutdown() {
 	config := client.Config{
 		ServerURL:    "wss://hook.example.com/ws",
+		UserAgent:    "myapp/v1.0.0",
 		Organization: "myorg",
 		Token:        "ghp_yourtoken",
 	}

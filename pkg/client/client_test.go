@@ -21,6 +21,7 @@ func TestStopMultipleCalls(t *testing.T) {
 	// Create a client with minimal config
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true, // Disable reconnect to make test faster
@@ -62,6 +63,7 @@ func TestStopMultipleCalls(t *testing.T) {
 func TestStopBeforeStart(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -89,6 +91,7 @@ func TestStopBeforeStart(t *testing.T) {
 func TestCommitPRCachePopulation(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -306,6 +309,7 @@ func TestClientConnectAndReceiveEvents(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -384,6 +388,7 @@ func TestClientPingPong(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		PingInterval: 100 * time.Millisecond, // Fast pings for testing
@@ -461,6 +466,7 @@ func TestClientReconnection(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxBackoff:   100 * time.Millisecond, // Fast reconnection for testing
@@ -515,6 +521,7 @@ func TestClientAuthenticationError(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "bad-token",
 		Organization: "test-org",
 		MaxRetries:   3,
@@ -582,6 +589,7 @@ func TestClientServerPings(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -632,6 +640,7 @@ func TestClientEventWithCommitSHA(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -693,6 +702,7 @@ func TestClientWriteChannelBlocking(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		PingInterval: 10 * time.Millisecond, // Very fast pings to fill buffer
@@ -731,6 +741,7 @@ func TestClientCachePopulationFromPullRequestEvent(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -796,6 +807,7 @@ func TestClientErrorResponse(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxRetries:   2,
@@ -831,6 +843,7 @@ func TestClientInvalidJSON(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    wsURL,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxRetries:   1,
@@ -875,6 +888,7 @@ func TestClientConnectionClosed(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxRetries:   1,
@@ -913,6 +927,7 @@ func TestClientMaxRetries(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxRetries:   3,
@@ -952,6 +967,7 @@ func TestClientStopWhileConnecting(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    wsURL,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -994,6 +1010,7 @@ func TestClientEventWithoutCommitSHA(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1047,6 +1064,7 @@ func TestClientNoOnEvent(t *testing.T) {
 	// Create client without OnEvent callback
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1085,6 +1103,7 @@ func TestClientSubscriptionTimeout(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		MaxRetries:   1,
@@ -1118,6 +1137,7 @@ func TestClientUnknownMessageType(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1157,6 +1177,7 @@ func TestClientConfigValidation(t *testing.T) {
 			name: "empty token",
 			config: Config{
 				ServerURL:    "ws://localhost:8080",
+				UserAgent:    "test-client/v1.0.0",
 				Organization: "org",
 			},
 			errMsg: "token",
@@ -1165,6 +1186,7 @@ func TestClientConfigValidation(t *testing.T) {
 			name: "empty organization",
 			config: Config{
 				ServerURL: "ws://localhost:8080",
+				UserAgent: "test-client/v1.0.0",
 				Token:     "token",
 			},
 			errMsg: "organization",
@@ -1188,6 +1210,7 @@ func TestClientConfigValidation(t *testing.T) {
 func TestClientDefaultConfig(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "token",
 		Organization: "org",
 	})
@@ -1224,6 +1247,7 @@ func TestClientMultiplePRsForCommit(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1283,6 +1307,7 @@ func TestClientCheckEventExpansion(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1344,6 +1369,7 @@ func TestClientInvalidTimestamp(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1407,6 +1433,7 @@ func TestClientInvalidPRURL(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1440,6 +1467,7 @@ func TestClientInvalidPRURL(t *testing.T) {
 func TestClientCacheEviction(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1502,6 +1530,7 @@ func TestClientPRNumberParsingError(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1550,6 +1579,7 @@ func TestClientCheckEventWithoutCommitSHA(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1602,6 +1632,7 @@ func TestClientCheckEventWithPRURL(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1660,6 +1691,7 @@ func TestClientInvalidCheckEventURL(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1703,6 +1735,7 @@ func TestClientTokenProvider(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "initial-token", // Will be replaced by provider
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1743,6 +1776,7 @@ func TestClientTokenProviderError(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "initial-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1790,6 +1824,7 @@ func TestClientUserEventsOnly(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:      srv.url,
+		UserAgent:      "test-client/v1.0.0",
 		Token:          "test-token",
 		Organization:   "test-org",
 		NoReconnect:    true,
@@ -1838,6 +1873,7 @@ func TestClientNoPRsForCommit(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1889,6 +1925,7 @@ func TestClientEmptyCacheLookup(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1916,6 +1953,7 @@ func TestClientWSSOrigin(t *testing.T) {
 	// Create client with wss:// URL (even though we can't actually test WSS)
 	client, err := New(Config{
 		ServerURL:    "wss://secure.example.com:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1949,6 +1987,7 @@ func TestClientEventWithDeliveryID(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -1999,6 +2038,7 @@ func TestClientZeroPRNumber(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2053,6 +2093,7 @@ func TestClientSubscriptionOrgMismatch(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2087,6 +2128,7 @@ func TestClientEventWithoutType(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2139,6 +2181,7 @@ func TestClientEventWithoutURL(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2191,6 +2234,7 @@ func TestClientCheckSuiteType(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2243,6 +2287,7 @@ func TestClientEventWithoutTimestamp(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2348,6 +2393,7 @@ func TestEnsureCacheSpace(t *testing.T) {
 	t.Run("soft limit eviction", func(t *testing.T) {
 		client, err := New(Config{
 			ServerURL:    "ws://localhost:8080",
+			UserAgent:    "test-client/v1.0.0",
 			Token:        "test-token",
 			Organization: "test-org",
 			NoReconnect:  true,
@@ -2378,6 +2424,7 @@ func TestEnsureCacheSpace(t *testing.T) {
 	t.Run("hard limit eviction", func(t *testing.T) {
 		client, err := New(Config{
 			ServerURL:    "ws://localhost:8080",
+			UserAgent:    "test-client/v1.0.0",
 			Token:        "test-token",
 			Organization: "test-org",
 			NoReconnect:  true,
@@ -2409,6 +2456,7 @@ func TestEnsureCacheSpace(t *testing.T) {
 	t.Run("no eviction needed", func(t *testing.T) {
 		client, err := New(Config{
 			ServerURL:    "ws://localhost:8080",
+			UserAgent:    "test-client/v1.0.0",
 			Token:        "test-token",
 			Organization: "test-org",
 			NoReconnect:  true,
@@ -2453,6 +2501,7 @@ func TestWritePumpContextCancellation(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2487,6 +2536,7 @@ func TestWritePumpContextCancellation(t *testing.T) {
 func TestSendPingsContextCancellation(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2533,6 +2583,7 @@ func TestReadEventsContextCancellation(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2580,6 +2631,7 @@ func TestConnectRetryBackoff(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  false, // Enable reconnection
@@ -2620,6 +2672,7 @@ func TestTokenProvider(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:     srv.url,
+		UserAgent:     "test-client/v1.0.0",
 		Organization:  "test-org",
 		TokenProvider: tokenProvider,
 		NoReconnect:   true,
@@ -2654,6 +2707,7 @@ func TestTokenProviderError(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:     srv.url,
+		UserAgent:     "test-client/v1.0.0",
 		Organization:  "test-org",
 		TokenProvider: tokenProvider,
 		NoReconnect:   true,
@@ -2683,6 +2737,7 @@ func TestConnectWithWSSOrigin(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    wssURL,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2705,6 +2760,7 @@ func TestConnectEventTypesWildcard(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		EventTypes:   []string{"*"},
@@ -2732,6 +2788,7 @@ func TestConnectWithPullRequests(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    srv.url,
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		PullRequests: []string{"https://github.com/owner/repo/pull/123"},
@@ -2786,6 +2843,7 @@ func TestWriteChannelBackpressure(t *testing.T) {
 	receivedEvents := 0
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2845,6 +2903,7 @@ func TestPingChannelFullScenario(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		PingInterval: 50 * time.Millisecond,
@@ -2898,6 +2957,7 @@ func TestWriteChannelClosedDuringOperation(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2936,6 +2996,7 @@ func TestReadTimeoutDuringGracefulShutdown(t *testing.T) {
 
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -2973,6 +3034,7 @@ func TestConcurrentWebSocketClose(t *testing.T) {
 
 		client, err := New(Config{
 			ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+			UserAgent:    "test-client/v1.0.0",
 			Token:        "test-token",
 			Organization: "test-org",
 			NoReconnect:  true,
@@ -3019,6 +3081,7 @@ func TestNetworkErrorDuringWrite(t *testing.T) {
 	var errorReceived atomic.Bool
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		PingInterval: 20 * time.Millisecond,
@@ -3065,6 +3128,7 @@ func TestIOTimeoutRecovery(t *testing.T) {
 	eventReceived := false
 	client, err := New(Config{
 		ServerURL:    "ws" + strings.TrimPrefix(srv.URL, "http"),
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -3090,6 +3154,7 @@ func TestIOTimeoutRecovery(t *testing.T) {
 func TestEmptyResultCacheTTL(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,
@@ -3151,6 +3216,7 @@ func TestEmptyResultCacheTTL(t *testing.T) {
 func TestNonEmptyResultNoCacheTTL(t *testing.T) {
 	client, err := New(Config{
 		ServerURL:    "ws://localhost:8080",
+		UserAgent:    "test-client/v1.0.0",
 		Token:        "test-token",
 		Organization: "test-org",
 		NoReconnect:  true,

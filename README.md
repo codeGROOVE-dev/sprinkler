@@ -27,10 +27,15 @@ go run ./cmd/client
 
 ## Client examples
 
+**Important**: All clients must provide a User-Agent header in the format `client-name/version` (e.g., `myapp/v1.0.0`). Connections without a valid User-Agent will be rejected with a 400 Bad Request error.
+
 ### Subscribe to organization events
 ```javascript
 const ws = new WebSocket('wss://your-server/ws', {
-  headers: { 'Authorization': 'Bearer ghp_your_github_token' }
+  headers: {
+    'Authorization': 'Bearer ghp_your_github_token',
+    'User-Agent': 'myapp/v1.0.0'
+  }
 });
 
 ws.on('open', () => {

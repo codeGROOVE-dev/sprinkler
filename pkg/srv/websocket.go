@@ -99,18 +99,32 @@ func (h *WebSocketHandler) PreValidateAuth(r *http.Request) bool {
 		githubTokenPattern.MatchString(githubToken)
 }
 
+// userAgentFromContext extracts client name and version from the parsed User-Agent in context.
+// Returns "unknown" for both if not found (e.g., in tests).
+func userAgentFromContext(ws *websocket.Conn) (clientName, clientVersion string) {
+	ua, _ := ws.Request().Context().Value("user_agent").(*security.UserAgent) //nolint:errcheck,revive // Type assertion intentionally unchecked - nil is valid
+	if ua != nil {
+		return ua.Name, ua.Version
+	}
+	return "unknown", "unknown"
+}
+
 // extractGitHubToken extracts and validates the GitHub token from the request.
 func (h *WebSocketHandler) extractGitHubToken(ctx context.Context, ws *websocket.Conn, ip string) (string, bool) {
 	if h.testMode {
 		return "", true
 	}
 
+	clientName, clientVersion := userAgentFromContext(ws)
+
 	authHeader := ws.Request().Header.Get("Authorization")
 	if authHeader == "" {
 		logger.Warn(ctx, "WebSocket authentication failed: missing Authorization header", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"path":       ws.Request().URL.Path,
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"path":           ws.Request().URL.Path,
 		})
 		return "", false
 	}
@@ -118,10 +132,12 @@ func (h *WebSocketHandler) extractGitHubToken(ctx context.Context, ws *websocket
 	const bearerPrefix = "Bearer "
 	if !strings.HasPrefix(authHeader, bearerPrefix) {
 		logger.Warn(ctx, "WebSocket authentication failed: invalid Authorization header format", logger.Fields{
-			"ip":            ip,
-			"user_agent":    ws.Request().UserAgent(),
-			"path":          ws.Request().URL.Path,
-			"header_prefix": authHeader[:min(10, len(authHeader))], // Log first 10 chars
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"path":           ws.Request().URL.Path,
+			"header_prefix":  authHeader[:min(10, len(authHeader))], // Log first 10 chars
 		})
 		return "", false
 	}
@@ -129,9 +145,11 @@ func (h *WebSocketHandler) extractGitHubToken(ctx context.Context, ws *websocket
 
 	if len(githubToken) < minTokenLength || len(githubToken) > maxTokenLength || !githubTokenPattern.MatchString(githubToken) {
 		logger.Warn(ctx, "WebSocket authentication failed: invalid GitHub token format", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"path":       ws.Request().URL.Path,
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"path":           ws.Request().URL.Path,
 		})
 		return "", false
 	}
@@ -139,13 +157,13 @@ func (h *WebSocketHandler) extractGitHubToken(ctx context.Context, ws *websocket
 	return githubToken, true
 }
 
-// getGitHubClient creates a GitHub API client using the factory if provided,
+// githubClient creates a GitHub API client using the factory if provided,
 // otherwise uses the default client constructor.
-func (h *WebSocketHandler) getGitHubClient(githubToken string) github.APIClient {
+func (h *WebSocketHandler) githubClient(token string) github.APIClient {
 	if h.githubClientFactory != nil {
-		return h.githubClientFactory(githubToken)
+		return h.githubClientFactory(token)
 	}
-	return github.NewClient(githubToken, nil)
+	return github.NewClient(token, nil)
 }
 
 // errorInfo holds error response details.
@@ -506,12 +524,17 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		closeWebSocket(wc, client, ip)
 	}()
 
+	// Get parsed User-Agent from context (set by main.go before upgrade)
+	clientName, clientVersion := userAgentFromContext(ws)
+
 	// Log incoming WebSocket request
 	logger.Info(ctx, "WebSocket connection attempt", logger.Fields{
-		"ip":         ip,
-		"user_agent": ws.Request().UserAgent(),
-		"path":       ws.Request().URL.Path,
-		"origin":     ws.Request().Header.Get("Origin"),
+		"ip":             ip,
+		"user_agent":     ws.Request().UserAgent(),
+		"client_name":    clientName,
+		"client_version": clientVersion,
+		"path":           ws.Request().URL.Path,
+		"origin":         ws.Request().Header.Get("Origin"),
 	})
 
 	// Get reservation token from context (set by main.go before upgrade)
@@ -547,9 +570,11 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		}
 
 		logger.Warn(ctx, "WebSocket connection rejected: 403 Forbidden - authentication failed", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"reason":     "invalid_token",
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"reason":         "invalid_token",
 		})
 		return
 	}
@@ -572,8 +597,10 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 			}
 
 			logger.Warn(ctx, "WebSocket connection rejected: reservation expired", logger.Fields{
-				"ip":         ip,
-				"user_agent": ws.Request().UserAgent(),
+				"ip":             ip,
+				"user_agent":     ws.Request().UserAgent(),
+				"client_name":    clientName,
+				"client_version": clientVersion,
 			})
 			return
 		}
@@ -592,9 +619,11 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	sub, err := h.readSubscription(ws, ip)
 	if err != nil {
 		logger.Warn(ctx, "WebSocket connection rejected: failed to read subscription", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"error":      err.Error(),
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"error":          err.Error(),
 		})
 		return
 	}
@@ -624,10 +653,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		}
 
 		logger.Warn(ctx, "WebSocket connection rejected: invalid subscription", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"error":      err.Error(),
-			"org":        sub.Organization,
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"error":          err.Error(),
+			"org":            sub.Organization,
 		})
 		return
 	}
@@ -651,10 +682,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 				}
 
 				logger.Warn(ctx, "WebSocket connection rejected: event type not allowed", logger.Fields{
-					"ip":         ip,
-					"user_agent": ws.Request().UserAgent(),
-					"event_type": requestedType,
-					"org":        sub.Organization,
+					"ip":             ip,
+					"user_agent":     ws.Request().UserAgent(),
+					"client_name":    clientName,
+					"client_version": clientVersion,
+					"event_type":     requestedType,
+					"org":            sub.Organization,
 				})
 				return
 			}
@@ -674,10 +707,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	if err != nil {
 		// Error response already sent by validateAuth
 		logger.Warn(ctx, "WebSocket connection rejected: authentication/authorization failed", logger.Fields{
-			"ip":         ip,
-			"user_agent": ws.Request().UserAgent(),
-			"org":        sub.Organization,
-			"error":      err.Error(),
+			"ip":             ip,
+			"user_agent":     ws.Request().UserAgent(),
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"org":            sub.Organization,
+			"error":          err.Error(),
 		})
 		return
 	}
@@ -692,7 +727,7 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 		})
 	} else {
 		// Create GitHub client for tier lookup
-		ghClient := h.getGitHubClient(githubToken)
+		ghClient := h.githubClient(githubToken)
 		fetchedTier, tierErr := ghClient.UserTier(ctx, sub.Username)
 		if tierErr != nil {
 			logger.Warn(ctx, "failed to fetch marketplace tier, defaulting to free", logger.Fields{
@@ -750,6 +785,8 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 	log.Println("========================================")
 	logger.Info(ctx, "WebSocket connection established", logger.Fields{
 		"ip":                 ip,
+		"client_name":        clientName,
+		"client_version":     clientVersion,
 		"org":                sub.Organization,
 		"user":               sub.Username,
 		"client_id":          client.ID,
@@ -771,26 +808,40 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 
 	// Set a write deadline for the success response
 	if err := ws.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		logger.Error(ctx, "failed to set write deadline for success response", err, logger.Fields{"ip": ip})
+		logger.Error(ctx, "failed to set write deadline for success response", err, logger.Fields{
+			"ip":             ip,
+			"client_name":    clientName,
+			"client_version": clientVersion,
+		})
 		return
 	}
 
 	if err := websocket.JSON.Send(ws, successResp); err != nil {
-		logger.Error(ctx, "failed to send success response to client", err, logger.Fields{"ip": ip})
+		logger.Error(ctx, "failed to send success response to client", err, logger.Fields{
+			"ip":             ip,
+			"client_name":    clientName,
+			"client_version": clientVersion,
+		})
 		return
 	}
 
 	// Reset write deadline after successful send
 	if err := ws.SetWriteDeadline(time.Time{}); err != nil {
-		logger.Error(ctx, "failed to reset write deadline", err, logger.Fields{"ip": ip})
+		logger.Error(ctx, "failed to reset write deadline", err, logger.Fields{
+			"ip":             ip,
+			"client_name":    clientName,
+			"client_version": clientVersion,
+		})
 		return
 	}
 
 	logger.Info(ctx, "sent subscription confirmation to client", logger.Fields{
-		"ip":        ip,
-		"org":       sub.Organization,
-		"client_id": client.ID,
-		"time":      time.Now().Format(time.RFC3339),
+		"ip":             ip,
+		"client_name":    clientName,
+		"client_version": clientVersion,
+		"org":            sub.Organization,
+		"client_id":      client.ID,
+		"time":           time.Now().Format(time.RFC3339),
 	})
 
 	// Register client
@@ -802,10 +853,12 @@ func (h *WebSocketHandler) Handle(ws *websocket.Conn) {
 			sub.Username, sub.Organization, ip, client.ID)
 		log.Println("========================================")
 		logger.Info(ctx, "WebSocket disconnected", logger.Fields{
-			"ip":        ip,
-			"client_id": client.ID,
-			"user":      sub.Username,
-			"org":       sub.Organization,
+			"ip":             ip,
+			"client_name":    clientName,
+			"client_version": clientVersion,
+			"client_id":      client.ID,
+			"user":           sub.Username,
+			"org":            sub.Organization,
 		})
 	}()
 

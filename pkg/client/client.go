@@ -30,6 +30,9 @@ const (
 	// DefaultServerAddress is the default webhook sprinkler server address.
 	DefaultServerAddress = "webhook.github.codegroove.app"
 
+	// Version is the client library version.
+	Version = "v0.5.0"
+
 	// UI constants for logging.
 	separatorLine = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	msgTypeField  = "type"
@@ -65,6 +68,7 @@ type Config struct {
 	ServerURL      string
 	Token          string
 	TokenProvider  func() (string, error) // Optional: dynamically provide fresh tokens for reconnection
+	UserAgent      string                 // Required: User-Agent in format "client-name/version" (e.g., "myapp/v1.0.0")
 	Organization   string
 	EventTypes     []string
 	PullRequests   []string
@@ -111,6 +115,9 @@ func New(config Config) (*Client, error) {
 	// Validate required fields
 	if config.ServerURL == "" {
 		return nil, errors.New("serverURL is required")
+	}
+	if config.UserAgent == "" {
+		return nil, errors.New("userAgent is required (format: client-name/version, e.g., myapp/v1.0.0)")
 	}
 	if config.Organization == "" && len(config.PullRequests) == 0 {
 		return nil, errors.New("organization or pull requests required")
@@ -291,9 +298,10 @@ func (c *Client) connect(ctx context.Context) error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	// Add Authorization header
+	// Add Authorization and User-Agent headers
 	wsConfig.Header = make(map[string][]string)
 	wsConfig.Header["Authorization"] = []string{fmt.Sprintf("Bearer %s", token)}
+	wsConfig.Header["User-Agent"] = []string{c.config.UserAgent}
 
 	// Dial the server
 	ws, err := websocket.DialConfig(wsConfig)
